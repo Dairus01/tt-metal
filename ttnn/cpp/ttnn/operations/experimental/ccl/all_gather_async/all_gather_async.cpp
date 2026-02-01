@@ -25,6 +25,7 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     bool reverse_order,
     const std::optional<CoreRangeSet>& sub_core_grid) {
+    printf("invove 1\n");
     tt::tt_fabric::Topology usable_topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, std::nullopt);
     bool composite_all_gather_case = composite_common::use_composite_all_gather(input_tensor, dim, memory_config);
     bool all_gather_async_llama_sharded_case = composite_common::use_all_gather_async_llama_sharded(
@@ -79,11 +80,12 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     std::optional<uint32_t> num_buffers_per_channel,
     bool reverse_order,
     const std::optional<CoreRangeSet>& sub_core_grid) {
+    printf("invove 2\n");
     tt::tt_fabric::Topology usable_topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     bool composite_all_gather_case = composite_common::use_composite_all_gather(input_tensor, dim, memory_config);
     bool all_gather_async_llama_sharded_case = composite_common::use_all_gather_async_llama_sharded(
         input_tensor, memory_config.value_or(input_tensor.memory_config()));
-    if (composite_all_gather_case && !all_gather_async_llama_sharded_case) {
+    if (false && composite_all_gather_case && !all_gather_async_llama_sharded_case) {
         log_debug(tt::LogOp, "Using composite_all_gather");
         TT_FATAL(!sub_core_grid.has_value(), "Composite All Gather OP does not currently support sub core grid");
         return composite_common::composite_all_gather(
@@ -127,6 +129,7 @@ std::vector<ttnn::Tensor> ExecuteAllGatherAsync::invoke(
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
     const std::optional<CoreRangeSet>& sub_core_grid) {
+    printf("invove 3\n");
     tt::tt_fabric::Topology usable_topology =
         ::ttnn::ccl::get_usable_topology(input_tensors.at(0), topology, cluster_axis);
     bool composite_all_gather_case =
@@ -185,6 +188,7 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     bool reverse_order,
     const std::optional<CoreRangeSet>& sub_core_grid) {
+    printf("invove 4\n");
     tt::tt_fabric::Topology usable_topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     bool composite_all_gather_case = composite_common::use_composite_all_gather(input_tensor, dim, memory_config);
     bool all_gather_async_llama_sharded_case = composite_common::use_all_gather_async_llama_sharded(
