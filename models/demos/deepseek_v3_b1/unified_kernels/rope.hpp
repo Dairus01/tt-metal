@@ -181,6 +181,7 @@ struct Rope {
                 cb_wait_front(args.sin_interm_cb, Wt);
                 cb_wait_front(args.cos_interm_cb, Wt);
                 add_tiles_init(args.cos_interm_cb, args.sin_interm_cb);
+                PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE, true>(args.out_cb)));
                 tile_regs_acquire();
                 for (uint32_t j = 0; j < Wt; ++j) {
                     add_tiles(args.cos_interm_cb, args.sin_interm_cb, j, j, j);

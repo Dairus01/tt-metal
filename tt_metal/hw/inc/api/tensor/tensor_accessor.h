@@ -247,6 +247,7 @@ private:
         auto bank_y = get_bank_y(packed_xy_coords[page_mapping.bank_id]);
         auto bank_start = DSpec::is_dram ? tensor_accessor::get_dram_bank_base_offset(bank_x, noc)
                                          : NOC_XY_ADDR(DYNAMIC_NOC_X(noc, bank_x), DYNAMIC_NOC_Y(noc, bank_y), 0);
+        DPRINT << " bank_start: " << HEX() << bank_x << " " << bank_y << ENDL();
         return bank_start + bank_base_address + (page_mapping.bank_page_offset * page_size) + offset;
     }
 
