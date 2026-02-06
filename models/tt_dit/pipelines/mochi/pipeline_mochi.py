@@ -24,6 +24,7 @@ from ...models.vae.vae_mochi import MochiVAEDecoder
 from ...parallel.config import DiTParallelConfig, MochiVAEParallelConfig, ParallelFactor
 from ...parallel.manager import CCLManager
 from ...utils import cache
+from ...utils.tracing import Tracer
 
 
 # from: https://github.com/genmoai/models/blob/075b6e36db58f1242921deff83a1066887b9c9e1/src/mochi_preview/infer.py#L77
@@ -224,6 +225,7 @@ class MochiPipeline(DiffusionPipeline):
             parallel_config=parallel_config,
             is_fsdp=True,
         )
+        self._transformer_tracer = Tracer(self.transformer.forward, device=mesh_device)
 
         # Load state dict into TT transformer
         cache.load_model(
@@ -370,6 +372,7 @@ class MochiPipeline(DiffusionPipeline):
         max_sequence_length: int = 256,
         device: Optional[torch.device] = None,
         dtype: Optional[torch.dtype] = None,
+        disable_attention_mask: bool = False,
     ):
         device = "cpu"
         dtype = dtype or self.text_encoder.dtype
@@ -389,6 +392,9 @@ class MochiPipeline(DiffusionPipeline):
         text_input_ids = text_inputs.input_ids
         prompt_attention_mask = text_inputs.attention_mask
         prompt_attention_mask = prompt_attention_mask.bool().to(device)
+
+        if disable_attention_mask:
+            prompt_attention_mask.fill_(value=True)
 
         # The original Mochi implementation zeros out empty negative prompts
         # but this can lead to overflow when placing the entire pipeline under the autocast context
@@ -433,6 +439,7 @@ class MochiPipeline(DiffusionPipeline):
         max_sequence_length: int = 256,
         device: Optional[torch.device] = None,
         dtype: Optional[torch.dtype] = None,
+        disable_attention_mask: bool = False,
     ):
         r"""
         Encodes the prompt into text encoder hidden states.
@@ -475,6 +482,7 @@ class MochiPipeline(DiffusionPipeline):
                 max_sequence_length=max_sequence_length,
                 device=device,
                 dtype=dtype,
+                disable_attention_mask=disable_attention_mask,
             )
 
         if do_classifier_free_guidance and negative_prompt_embeds is None:
@@ -499,6 +507,7 @@ class MochiPipeline(DiffusionPipeline):
                 max_sequence_length=max_sequence_length,
                 device=device,
                 dtype=dtype,
+                disable_attention_mask=disable_attention_mask,
             )
 
         return prompt_embeds, prompt_attention_mask, negative_prompt_embeds, negative_prompt_attention_mask
@@ -680,6 +689,7 @@ class MochiPipeline(DiffusionPipeline):
             negative_prompt_attention_mask=negative_prompt_attention_mask,
             max_sequence_length=max_sequence_length,
             device=device,
+            disable_attention_mask=traced,
         )
         if profiler:
             profiler.end("encoder", profiler_iteration)
@@ -707,6 +717,7 @@ class MochiPipeline(DiffusionPipeline):
                 parallel_config=self.parallel_config,
                 is_fsdp=True,
             )
+            self._transformer_tracer = Tracer(self.transformer.forward, device=self.mesh_device)
 
             # Load state dict into TT transformer
             logger.info("Loading MochiTransformer3DModel state_dict")
@@ -785,23 +796,23 @@ class MochiPipeline(DiffusionPipeline):
                 print(f"prompt_attention_mask.shape: {prompt_attention_mask.shape}")
                 print(f"attention_kwargs: {attention_kwargs}")
 
-                noise_pred_uncond = self.transformer(
+                noise_pred_uncond = self._transformer_forward(
                     spatial=latent_model_input[:1],
                     prompt=prompt_embeds[:1],
                     timestep=timestep[:1],
                     prompt_attention_mask=prompt_attention_mask[:1],
+                    traced=traced,
                 )
-                noise_pred_text = self.transformer(
+                noise_pred_text = self._transformer_forward(
                     spatial=latent_model_input[1:],
                     prompt=prompt_embeds[1:],
                     timestep=timestep[1:],
                     prompt_attention_mask=prompt_attention_mask[1:],
+                    traced=traced,
                 )
                 print(f"noise_pred_uncond.shape: {noise_pred_uncond.shape}")
                 print(f"noise_pred_text.shape: {noise_pred_text.shape}")
                 # Mochi CFG + Sampling runs in FP32
-                noise_pred_uncond = noise_pred_uncond.to(torch.float32)
-                noise_pred_text = noise_pred_text.to(torch.float32)
 
                 assert self.do_classifier_free_guidance == True
                 if self.do_classifier_free_guidance:
@@ -857,6 +868,8 @@ class MochiPipeline(DiffusionPipeline):
             if self.reload_dit_model:
                 logger.info("Freeing MochiTransformer3DModel")
                 self.transformer = None
+                self._transformer_tracer.release_trace()
+                self._transformer_tracer = None
 
             # Reshape the device mesh to the VAE mesh shape:
             if tuple(self.mesh_device.shape) != self.vae_mesh_shape:
@@ -884,3 +897,40 @@ class MochiPipeline(DiffusionPipeline):
 
     def synchronize_devices(self):
         ttnn.synchronize_device(self.mesh_device)
+
+    def _transformer_forward(
+        self,
+        *,
+        spatial: torch.Tensor,
+        prompt: torch.Tensor,
+        timestep: torch.Tensor,
+        prompt_attention_mask: torch.Tensor,
+        traced: bool,
+    ) -> torch.Tensor:
+        assert self.transformer is not None
+        assert self._transformer_tracer is not None
+
+        B, C, T, H, W = spatial.shape
+        pH, pW = H // self.patch_size, W // self.patch_size
+        N = T * pH * pW
+
+        rope_cos_1HND, rope_sin_1HND, trans_mat = self.transformer.prepare_rope_features(T, H, W)
+        temb_11BD, prompt_1BLP = self.transformer.prepare_timestep_text_features(
+            timestep, prompt, prompt_attention_mask
+        )
+        spatial_1BNI, N = self.transformer.preprocess_spatial_input(spatial)
+
+        forward = self._transformer_tracer if traced else self.transformer.forward
+
+        proj_out_1BNI = forward(
+            temb_11BD=temb_11BD,
+            prompt_1BLP=prompt_1BLP,
+            rope_cos_1HND=rope_cos_1HND,
+            rope_sin_1HND=rope_sin_1HND,
+            spatial_1BNI=spatial_1BNI,
+            trans_mat=trans_mat,
+            N=N,
+        )
+
+        out = self.transformer.postprocess_spatial_output(proj_out_1BNI, T, H, W, N)
+        return out.to(torch.float32)
