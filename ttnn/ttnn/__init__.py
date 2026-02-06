@@ -397,6 +397,11 @@ from ttnn.operations.matmul import (
     MatmulMultiCoreReuseMultiCast1DProgramConfig,
     MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig,
     MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig,
+    MatmulParams,
+    MatmulInputs,
+    MatmulDeviceOperation,
+    MatmulMultiCoreReuseOptimizedProgramFactory,
+    create_matmul_attributes,
 )
 
 from ttnn.operations.normalization import (
