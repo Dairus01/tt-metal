@@ -15,6 +15,7 @@
 #include "llrt/hal/generated/dev_msgs.hpp"
 #include "llrt/rtoptions.hpp"
 #include "llrt/llrt.hpp"
+#include "tt_cluster.hpp"
 
 namespace tt::tt_metal::experimental {
 
@@ -48,7 +49,7 @@ void DispatchContext::initialize_fast_dispatch(distributed::MeshDevice* mesh_dev
         dev->init_command_queue_host();
     }
     // Query the number of command queues requested
-    device_manager->configure_and_load_fast_dispatch_kernels(/*force_recreate_topology=*/true);
+    device_manager->initialize_dispatch_firmware(/*force_recreate_topology=*/true);
     tt::tt_metal::MetalContext::instance().rtoptions().set_fast_dispatch(fast_dispatch_enabled_);
 
     auto& mesh_device_impl = mesh_device->impl();

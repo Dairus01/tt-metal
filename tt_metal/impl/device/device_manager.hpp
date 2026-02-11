@@ -12,7 +12,6 @@
 #include <hostdevcommon/common_values.hpp>
 #include "umd/device/types/cluster_descriptor_types.hpp"
 #include "device_impl.hpp"
-#include "impl/dispatch/topology.hpp"
 
 namespace tt::tt_metal {
 
@@ -50,11 +49,12 @@ public:
     // Called by the mesh device
     void initialize_profiler();
     void initialize_fabric_and_dispatch_fw();
+    // Initialize dispatch firmware (compile + configure device CQs). This may be used by dispatchcontext to
+    // re-enable fast dispatch after it was disabled at runtime.
+    void initialize_dispatch_firmware(bool force_recreate_topology);
+    void reset_dispatch_topology();
     // API needed due to Issue #19729
     std::size_t get_max_num_eth_cores_across_all_devices() const;
-
-    // Create the dispatch topology overwriting the existing one if it exists.
-    void create_dispatch_topology();
     const std::unordered_set<CoreCoord>& get_virtual_dispatch_cores(ChipId dev_id) const;
     const std::unordered_set<CoreCoord>& get_virtual_dispatch_routing_cores(ChipId dev_id) const;
 
@@ -71,8 +71,6 @@ private:
 
     mutable std::mutex lock_;
     std::vector<std::unique_ptr<Device>> devices_;
-
-    std::shared_ptr<DispatchTopology> dispatch_topology_;
 
     bool skip_remote_devices_{};
 
@@ -92,9 +90,6 @@ private:
     void add_devices_to_pool(const std::vector<ChipId>& device_ids);
     Device* get_device(ChipId id) const;
     std::vector<Device*> get_all_active_devices_impl() const;
-
-    // Initialize dispatch firmware (compile + configure device CQs).
-    void initialize_dispatch_firmware();
 
     friend class experimental::DispatchContext;
 };

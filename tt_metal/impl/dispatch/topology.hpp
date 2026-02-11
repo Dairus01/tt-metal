@@ -13,9 +13,11 @@
 
 #include "core_coord.hpp"
 #include "data_types.hpp"
+#include "device/device_impl.hpp"
 #include "tt-metalium/program.hpp"
 #include "tt_metal/impl/dispatch/kernel_config/fd_kernel.hpp"
 #include "tt_metal/impl/dispatch/dispatch_core_common.hpp"
+#include "tt_metal/impl/context/context_descriptor.hpp"
 
 namespace tt {
 class Cluster;
@@ -31,6 +33,7 @@ class IDevice;
 class DeviceManager;
 class DispatchMemMap;
 class dispatch_core_manager;
+
 enum DispatchWorkerType : uint32_t;
 
 // NOC ID used by dispatch kernels to communicate with downstream cores. This parameter
@@ -49,20 +52,12 @@ struct DispatchKernelNode {
     int tunnel_index{-1};             // Tunnel index
 };
 
-// TODO: Use the correct ContextDescriptor once that PR is merged
-struct ContextDescriptor {
-    const tt::Cluster& cluster;
-    dispatch_core_manager& dispatch_core_manager_;
-    const DispatchMemMap& dispatch_mem_map;
-    DeviceManager* device_manager;
-};
-
 class DispatchTopology {
 public:
     explicit DispatchTopology(const ContextDescriptor& descriptor);
     ~DispatchTopology();
 
-    void populate_fd_kernels(const std::vector<IDevice*>& devices, uint32_t num_hw_cqs);
+    void populate_fd_kernels(const std::vector<Device*>& devices, uint32_t num_hw_cqs);
     void populate_fd_kernels(const std::set<ChipId>& device_ids, uint32_t num_hw_cqs);
     void populate_fd_kernels(const std::vector<DispatchKernelNode>& nodes);
 
@@ -74,19 +69,19 @@ public:
 
     const std::unordered_set<CoreCoord>& get_virtual_dispatch_cores(ChipId dev_id) const;
     const std::unordered_set<CoreCoord>& get_virtual_dispatch_routing_cores(ChipId dev_id) const;
-    const std::unordered_set<TerminationInfo>& get_registered_termination_cores(ChipId dev_id);
+    const std::unordered_set<TerminationInfo>& get_registered_termination_cores(ChipId dev_id) const;
 
     void reset();
 
 private:
     std::vector<DispatchKernelNode> generate_nodes(const std::set<ChipId>& device_ids, uint32_t num_hw_cqs) const;
 
-    ContextDescriptor context_;
+    const ContextDescriptor& descriptor_;
+    std::unique_ptr<DispatchMemMap> dispatch_mem_map_[enchantum::to_underlying(CoreType::COUNT)];
     std::vector<FDKernel*> node_id_to_kernel_;
     std::unique_ptr<detail::ProgramCompileGroup> command_queue_compile_group_;
     std::unordered_map<ChipId, std::unordered_set<CoreCoord>> dispatch_cores_;
     std::unordered_map<ChipId, std::unordered_set<CoreCoord>> routing_cores_;
-    mutable std::unordered_map<ChipId, std::unordered_set<CoreCoord>> empty_cores_;
     std::unordered_map<ChipId, std::unordered_set<TerminationInfo>> termination_info_;
 };
 

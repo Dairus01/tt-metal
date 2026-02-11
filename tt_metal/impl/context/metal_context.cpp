@@ -295,13 +295,6 @@ void MetalContext::initialize(
         }
     }
 
-    // Populate FD topology across all devices
-    if (rtoptions_.get_fast_dispatch()) {
-        std::set<ChipId> all_devices_set(all_devices.begin(), all_devices.end());
-        // TODO: enable this when dispatch init/teardown moves to MetalContext
-        // populate_fd_kernels(all_devices_set, num_hw_cqs);
-    }
-
     // Set internal routing for active ethernet cores, this is required for our FW to run
     if (has_flag(MetalContext::instance().get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC) &&
         cluster_->get_target_device_type() != tt::TargetDevice::Mock) {
@@ -502,9 +495,9 @@ void MetalContext::teardown_dispatch_state() {
             mem_map.reset();
         }
     }
+    device_manager_->reset_dispatch_topology();
     dispatch_query_manager_.reset();
     dispatch_core_manager_.reset();
-    tt::tt_metal::reset_topology_state();
 }
 
 void MetalContext::initialize_base_objects() {
@@ -899,6 +892,7 @@ std::shared_ptr<ContextDescriptor> MetalContext::create_context_descriptor(
         *hal_,
         *cluster_,
         rtoptions_,
+        *dispatch_core_manager_,
         fabric_config_,
         fabric_reliability_mode_,
         fabric_tensix_config_,

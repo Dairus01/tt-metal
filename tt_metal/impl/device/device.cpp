@@ -162,7 +162,7 @@ std::unique_ptr<AllocatorImpl> Device::initialize_allocator(
 
 // Writes issue and completion queue pointers to device and in sysmem and loads fast dispatch program onto dispatch
 // cores
-void Device::configure_command_queue_programs(const std::shared_ptr<DispatchTopology>& dispatch_topology) {
+void Device::configure_command_queue_programs(DispatchTopology* dispatch_topology) {
     ChipId device_id = this->id();
     ChipId mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
 
@@ -245,7 +245,7 @@ void Device::init_command_queue_host() {
     }
 }
 
-void Device::init_command_queue_device_with_topology(const std::shared_ptr<DispatchTopology>& topo) {
+void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
     TT_ASSERT(topo != nullptr, "Dispatch topology required for init_command_queue_device_with_topology");
     this->command_queue_programs_.push_back(topo->get_compiled_cq_program(this));
     TT_ASSERT(this->command_queue_programs_.size() == 1);

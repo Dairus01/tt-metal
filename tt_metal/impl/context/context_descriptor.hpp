@@ -61,6 +61,7 @@ public:
         const Hal& hal,
         Cluster& cluster,
         const llrt::RunTimeOptions& rtoptions,
+        dispatch_core_manager& dispatch_core_manager,
         tt::tt_fabric::FabricConfig fabric_config,
         tt::tt_fabric::FabricReliabilityMode reliability_mode,
         tt::tt_fabric::FabricTensixConfig fabric_tensix_config,
@@ -77,6 +78,7 @@ public:
         hal_(&hal),
         cluster_(&cluster),
         rtoptions_(&rtoptions),
+        dispatch_core_manager_(&dispatch_core_manager),
         num_cqs_(num_cqs),
         l1_small_size_(l1_small_size),
         trace_region_size_(trace_region_size),
@@ -96,6 +98,7 @@ public:
     const Hal& hal() const { return *hal_; }
     Cluster& cluster() const { return *cluster_; }
     const llrt::RunTimeOptions& rtoptions() const { return *rtoptions_; }
+    dispatch_core_manager& dispatch_core_manager() const { return *dispatch_core_manager_; }
 
     int num_cqs() const { return num_cqs_; }
     int l1_small_size() const { return l1_small_size_; }
@@ -122,6 +125,7 @@ private:
     const Hal* hal_ = nullptr;
     Cluster* cluster_ = nullptr;
     const llrt::RunTimeOptions* rtoptions_ = nullptr;
+    tt::tt_metal::dispatch_core_manager* dispatch_core_manager_ = nullptr;
 
     // Dispatch
     int num_cqs_ = 1;
