@@ -12,6 +12,7 @@
 #include <hostdevcommon/common_values.hpp>
 #include "umd/device/types/cluster_descriptor_types.hpp"
 #include "device_impl.hpp"
+#include "impl/dispatch/topology.hpp"
 
 namespace tt::tt_metal {
 
@@ -52,6 +53,11 @@ public:
     // API needed due to Issue #19729
     std::size_t get_max_num_eth_cores_across_all_devices() const;
 
+    // Create the dispatch topology overwriting the existing one if it exists.
+    void create_dispatch_topology();
+    const std::unordered_set<CoreCoord>& get_virtual_dispatch_cores(ChipId dev_id) const;
+    const std::unordered_set<CoreCoord>& get_virtual_dispatch_routing_cores(ChipId dev_id) const;
+
 private:
     uint8_t num_hw_cqs_{};
     size_t l1_small_size_{};
@@ -65,6 +71,8 @@ private:
 
     mutable std::mutex lock_;
     std::vector<std::unique_ptr<Device>> devices_;
+
+    std::shared_ptr<DispatchTopology> dispatch_topology_;
 
     bool skip_remote_devices_{};
 
