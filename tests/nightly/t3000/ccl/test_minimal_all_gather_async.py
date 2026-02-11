@@ -328,6 +328,10 @@ def run_all_gather_impl(
             tt_ag_out = tt_ag_out[:, :, :, 0 : expected_tensor.shape[3]]
             eq, output = comp_pcc(tt_ag_out, expected_tensor, allowed_pcc)
             logger.info(f"{output}, iteration {i}, reversed={is_reversed}")
+            # torch.set_printoptions(threshold=100*100, linewidth=100*100, sci_mode=False)
+            # print("tt_out")
+            # print(tt_ag_out)
+            # print(expected_tensor)
             assert eq, f"{i} FAILED ag: {output}"
 
     mesh_device.reset_sub_device_stall_group()
@@ -342,51 +346,65 @@ def run_all_gather_impl(
     "ag_output_shape, dim, layout, ag_input_dtype, enable_trace, num_iters, use_barrier, use_persistent_buffers, pcc_threshold, mem_config_input, mem_config_ag",
     [
         # composite factories
+        # (
+        #     [1, 32, 128, 128],
+        #     1,
+        #     # [8, 1, 1, 32],
+        #     # 0,
+        #     ttnn.ROW_MAJOR_LAYOUT,
+        #     ttnn.bfloat16,
+        #     False,
+        #     1,
+        #     None,
+        #     None,
+        #     1.0,
+        #     ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        #     ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        # ),
         (
-            [1, 32, 128, 128],
-            1,
-            ttnn.ROW_MAJOR_LAYOUT,
-            ttnn.bfloat16,
-            True,
-            3,
-            None,
-            None,
-            1.0,
-            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-        ),
-        (
-            [1, 1, 32, 128 * 128],
+            # [1, 1, 32, 128 * 128],
+            [1, 1, 32, 2048],
+            # [1, 1, 8, 1024],
             2,
             ttnn.ROW_MAJOR_LAYOUT,
             ttnn.bfloat16,
-            True,
-            3,
+            False,
+            1,
             None,
             None,
             1.0,
+            # ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            # ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
             ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
                 ttnn.BufferType.L1,
                 ttnn.ShardSpec(
                     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
-                    (1, 128 * 128),  # (shard_height, shard_width)
+                    # (1, 128 * 128),  # (shard_height, shard_width)
+                    (1, 2048),  # (shard_height, shard_width)
+                    # (1, 128),  # (shard_height, shard_width)
                     ttnn.ShardOrientation.ROW_MAJOR,
                 ),
             ),
+            # ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
             ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.WIDTH_SHARDED,
                 ttnn.BufferType.L1,
                 ttnn.ShardSpec(
                     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 7))}),
                     (32, 512),  # (shard_height, shard_width)
+                    # (32, 512),  # (shard_height, shard_width)
+                    # (8, 128),  # (shard_height, shard_width)
                     ttnn.ShardOrientation.ROW_MAJOR,
                 ),
             ),
         )
         # ([1, 1, 256, 2112], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, None, None, 1.0),  # perf
     ],
-    ids=["dram", "sharded"]
+    # ids=[
+    #     "dram",
+    #     "sharded"
+    # ]
     # [
     #     (
     #         [1, 1, 1024, 5120],

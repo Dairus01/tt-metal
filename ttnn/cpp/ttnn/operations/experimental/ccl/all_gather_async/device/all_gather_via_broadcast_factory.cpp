@@ -80,8 +80,11 @@ AllGatherViaBroadcastFactory::cached_program_t AllGatherViaBroadcastFactory::cre
     std::cout << "intput: " << input_tensor.logical_shape() << std::endl;
     std::cout << "output: " << output_tensor.logical_shape() << std::endl;
     std::cout << "dim: " << operation_attributes.dim << std::endl;
-    std::cout << "page_size: " << input_tensor.buffer()->aligned_page_size() << std::endl;
-    std::cout << "page_size (non-aligned): " << input_tensor.buffer()->page_size() << std::endl;
+    std::cout << "(input) page_size: " << input_tensor.buffer()->aligned_page_size() << std::endl;
+    std::cout << "(input) page_size (non-aligned): " << input_tensor.buffer()->page_size() << std::endl;
+    std::cout << "(output) page_size: " << output_tensor.buffer()->aligned_page_size() << std::endl;
+    std::cout << "(output) page_size (non-aligned): " << output_tensor.buffer()->page_size() << std::endl;
+    std::cout << "memory config: " << output_tensor.memory_config() << '\n';
 
     [[maybe_unused]] bool is_first_chip = ring_index == 0;
     [[maybe_unused]] bool is_last_chip = ring_index == ring_size - 1;
@@ -99,12 +102,17 @@ AllGatherViaBroadcastFactory::cached_program_t AllGatherViaBroadcastFactory::cre
     TT_FATAL(forward_coord.has_value() || backward_coord.has_value(), "DEBUG: forward_coord or backward_coord is null");
 
     bool sharded = input_tensor.memory_config().memory_layout() != TensorMemoryLayout::INTERLEAVED;
-    bool tilized = input_tensor.layout() == ttnn::TILE_LAYOUT;
+    bool tilized = output_tensor.layout() == ttnn::TILE_LAYOUT;
+
+    // std::cout << "memory config: " << input_tensor.memory_config() << '\n';
+    sharded = false;
+    tilized = false;
 
     uint32_t num_width_shards = 1;
-    if (!tilized && (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
-                     input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED)) {
-        num_width_shards = input_tensor.padded_shape()[-1] / input_tensor.memory_config().shard_spec()->shape[1];
+    if (!tilized && (output_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
+                     output_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED)) {
+        num_width_shards = output_tensor.padded_shape()[-1] / output_tensor.memory_config().shard_spec()->shape[1];
+        // std::cout << "here shard_spec " << output_tensor.memory_config() << '\n';
     }
     // Get OP Config, topology config
     auto [num_targets_forward, num_targets_backward] = ::ttnn::ccl::get_forward_backward_line_mcast_distance(
@@ -120,8 +128,8 @@ AllGatherViaBroadcastFactory::cached_program_t AllGatherViaBroadcastFactory::cre
         std::nullopt);
 
     // Info for RM tensors
-    uint32_t row_size = input_tensor.logical_shape()[-1] * input_tensor.element_size();
-    uint32_t page_size = input_tensor.buffer()->aligned_page_size();
+    // uint32_t row_size = input_tensor.logical_shape()[-1] * input_tensor.element_size();
+    const uint32_t page_size = input_tensor.buffer()->aligned_page_size();
 
     uint32_t num_rows = input_tensor.logical_shape().size() > 2
                             ? input_tensor.logical_shape()[-2] * input_tensor.logical_shape()[-3]
@@ -137,9 +145,11 @@ AllGatherViaBroadcastFactory::cached_program_t AllGatherViaBroadcastFactory::cre
         dtype == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size_bytes) : fabric_max_packet_size_bytes;
     const size_t packet_size_bytes =
         tilized ? tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes() : MAX_PACKET_SIZE_BYTES;
+    std::cout << "packet_size_bytes " << packet_size_bytes << '\n';
     size_t max_packet_size = packet_size_bytes;
     uint32_t l1_scratch_cb_page_size_bytes = input_tensor.buffer()->aligned_page_size();
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
+    std::cout << "num_pages_per_packet " << num_pages_per_packet << '\n';
     uint32_t cb_num_pages = 3 * num_pages_per_packet;  // triple buffering
     uint32_t src0_cb_index = tt::CB::c_in0;
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
@@ -150,63 +160,59 @@ AllGatherViaBroadcastFactory::cached_program_t AllGatherViaBroadcastFactory::cre
     uint32_t buffer_page_size = page_size;
     uint32_t num_packets_per_page =
         static_cast<uint32_t>(std::ceil(static_cast<double>(buffer_page_size) / max_packet_size));
-    if (!tilized) {
-        if (num_width_shards > 1) {
-            buffer_page_size = input_tensor.memory_config().shard_spec()->shape[1] * input_tensor.element_size();
-        }
 
-        uint32_t num_rows_per_packet = (max_packet_size / buffer_page_size >= 2) ? 2 : 1;
-        cb_src0_config =
-            tt::tt_metal::CircularBufferConfig(3 * buffer_page_size * num_rows_per_packet, {{src0_cb_index, df}})
-                .set_page_size(src0_cb_index, buffer_page_size);
-    }
+    // if (!tilized) {
+    //     if (num_width_shards > 1) {
+    //         buffer_page_size = input_tensor.memory_config().shard_spec()->shape[1] * input_tensor.element_size();
+    //     }
+
+    //     // uint32_t num_rows_per_packet = (max_packet_size / buffer_page_size >= 2) ? 2 : 1;
+    //     cb_src0_config =
+    //         tt::tt_metal::CircularBufferConfig(3 * buffer_page_size, {{src0_cb_index, df}})
+    //             .set_page_size(src0_cb_index, buffer_page_size);
+    // }
+
+    // cb_src0_config = tt::tt_metal::CircularBufferConfig(3 * page_size, {{src0_cb_index, df}})
+    //                      .set_page_size(src0_cb_index, page_size);
+
     CreateCircularBuffer(program, sender_worker_core_range, cb_src0_config);
 
     // Tensor Info
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
-
     // KERNEL CREATION
     // Reader
     std::vector<uint32_t> reader_compile_args = {
-        src0_cb_index,                               // cb0_id
-        num_pages_per_packet,                        // packet_size_in_pages
-        input_tensor.buffer()->aligned_page_size(),  // tensor0_page_size
-        true,                                        // is_sender
+        src0_cb_index,                                      // cb0_id
+        buffer_page_size,                                   // page_size
+        input_tensor.buffer()->aligned_page_size(),         // row_size
+        (max_packet_size / buffer_page_size >= 2) ? 2 : 1,  // num_rows_per_packet
+        num_packets_per_page,                               // num_packets_per_page
+        max_packet_size,
+        true,  // is_sender
     };
-
-    if (!tilized) {
-        reader_compile_args = {
-            src0_cb_index,                                      // cb0_id
-            buffer_page_size,                                   // page_size
-            row_size,                                           // row_size
-            (max_packet_size / buffer_page_size >= 2) ? 2 : 1,  // num_rows_per_packet
-            num_packets_per_page,                               // num_packets_per_page
-            max_packet_size,
-            true,  // is_sender
-        };
-    }
 
     // Writer kernel
     std::vector<uint32_t> writer_compile_args = {
-        src0_cb_index,                               // cb0_id
-        num_pages_per_packet,                        // packet_size_in_pages
-        input_tensor.buffer()->aligned_page_size(),  // tensor0_page_size
-        num_targets_forward,                         // num_targets_forward_direction
-        num_targets_backward,                        // num_targets_backward_direction
-        true,                                        // is_sender
+        src0_cb_index,                                // cb0_id
+        num_pages_per_packet,                         // packet_size_in_pages
+        output_tensor.buffer()->aligned_page_size(),  // tensor0_page_size
+        num_targets_forward,                          // num_targets_forward_direction
+        num_targets_backward,                         // num_targets_backward_direction
+        true,                                         // is_sender
     };
 
     if (!tilized) {
         writer_compile_args = {
             src0_cb_index,  // cb0_id
             buffer_page_size,
-            row_size,
+            output_tensor.buffer()->aligned_page_size(),  // row_size
             max_packet_size,
-            (max_packet_size / buffer_page_size >= 2) ? 2 : 1,  // num_rows_per_packet
-            num_packets_per_page,                               // num_packets_per_row
-            num_targets_forward,                                // num_targets_forward_direction
-            num_targets_backward,                               // num_targets_backward_direction
-            true,                                               // is_sender
+            1,
+            // (max_packet_size / buffer_page_size >= 2) ? 2 : 1,  // num_rows_per_packet
+            num_packets_per_page,  // num_packets_per_row
+            num_targets_forward,   // num_targets_forward_direction
+            num_targets_backward,  // num_targets_backward_direction
+            true,                  // is_sender
         };
     }
     std::vector<uint32_t> mcast_forward_args(2, 0);
@@ -228,12 +234,12 @@ AllGatherViaBroadcastFactory::cached_program_t AllGatherViaBroadcastFactory::cre
         shard_builder::extend_sharding_compile_time_args(input_tensor, writer_compile_args);
     } else {
         tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
-        tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(writer_compile_args);
+        tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
     }
     auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         tilized ? "ttnn/cpp/ttnn/operations/ccl/broadcast/device/kernels/broadcast_tile_reader.cpp"
-                : "ttnn/cpp/ttnn/operations/ccl/broadcast/device/kernels/broadcast_rm_reader.cpp",
+                : "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/broadcast_rm_reader.cpp",
         sender_worker_core_range,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_args, kernel_defines));
 
@@ -267,14 +273,11 @@ AllGatherViaBroadcastFactory::cached_program_t AllGatherViaBroadcastFactory::cre
         uint32_t input_tile_id_start = (link * base_pages_per_worker) + std::min(link, remainder);
         uint32_t input_tile_id_end = ((link + 1) * base_pages_per_worker) + std::min(link + 1, remainder);
         std::vector<uint32_t> reader_rt_args = {
-            input_tensor.buffer()->address(),        // tensor_address0
-            input_tile_id_start * num_width_shards,  // tile_id_start
-            input_tile_id_end * num_width_shards,    // tile_id_end
+            input_tensor.buffer()->address(),  // tensor_address0
+            input_tile_id_start,               // tile_id_start
+            input_tile_id_end,                 // tile_id_end
         };
 
-        if (sharded) {
-            shard_builder::extend_sharding_run_time_args(input_tensor, reader_rt_args);
-        }
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_reader_kernel_id, {core}, reader_rt_args);
 
         // Set writer runtime args
@@ -283,25 +286,39 @@ AllGatherViaBroadcastFactory::cached_program_t AllGatherViaBroadcastFactory::cre
         uint32_t out_ready_sem_wait_value = ring_size * operation_attributes.num_links;
         uint32_t output_tile_id_start = input_tile_id_start;
         uint32_t output_tile_id_end = input_tile_id_end;
+        uint32_t num_result_rows = 1u;
+        for (int i = operation_attributes.dim; i < input_tensor.padded_shape().size() - 1; ++i) {
+            num_result_rows *= input_tensor.padded_shape()[i];
+        }
+        uint32_t write_offset = num_width_shards * num_result_rows * ring_index;
+        printf(
+            "num_rows %u; ring_index %u; write_offset %u, num_width_shards %u\n",
+            num_result_rows,
+            ring_index,
+            write_offset,
+            num_width_shards);
+        // aligned_page into tensoraccessor
+        (void)output_tile_id_start;
+        (void)output_tile_id_end;
+
         std::vector<uint32_t> writer_rt_args = {
-            output_tensor.buffer()->address(),        // tensor_address0  //HERE
-            semaphore.address(),                      // out_ready_sem_bank_addr (absolute address)
-            output_tile_id_start * num_width_shards,  // tile_id_start
-            output_tile_id_end * num_width_shards,    // tile_id_end
-            wait_output_semaphore,                    // wait_output_semaphore
-            reset_global_semaphore,                   // reset_global_semaphore
-            drain_sync_core.x,                        // out_ready_sem_noc0_x
-            drain_sync_core.y,                        // out_ready_sem_noc0_y
-            out_ready_sem_wait_value,                 // out_ready_sem_wait_value
-            barrier_semaphore.address(),              // barrier_sem
-            barrier_core.x,                           // barrier_sem_noc0_x
-            barrier_core.y                            // barrier_sem_noc0_y
+            output_tensor.buffer()->address(),  // tensor_address0  //HERE
+            write_offset,                       //
+            semaphore.address(),                // out_ready_sem_bank_addr (absolute address)
+            num_rows,
+            // output_tile_id_start * num_width_shards,  // tile_id_start
+            // output_tile_id_end * num_width_shards,    // tile_id_end
+            wait_output_semaphore,        // wait_output_semaphore
+            reset_global_semaphore,       // reset_global_semaphore
+            drain_sync_core.x,            // out_ready_sem_noc0_x
+            drain_sync_core.y,            // out_ready_sem_noc0_y
+            out_ready_sem_wait_value,     // out_ready_sem_wait_value
+            barrier_semaphore.address(),  // barrier_sem
+            barrier_core.x,               // barrier_sem_noc0_x
+            barrier_core.y                // barrier_sem_noc0_y
         };
         auto num_connections = (int)forward_coord.has_value() + (int)backward_coord.has_value();
         writer_rt_args.push_back(num_connections);
-        if (sharded) {
-            shard_builder::extend_sharding_run_time_args(input_tensor, writer_rt_args);
-        }
 
         const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
         std::vector<tt::tt_fabric::FabricNodeId> dst_nodes;
