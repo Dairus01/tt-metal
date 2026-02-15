@@ -585,8 +585,10 @@ static tt::tt_metal::KernelHandle generate_edm_kernel_impl(
         log_trace(tt::LogOp, "\t{}", s);
     }
 
-    auto kernel_config =
-        tt::tt_metal::EthernetConfig{.noc = noc_id, .processor = risc_id, .compile_args = eth_sender_ct_args};
+    auto kernel_config = tt::tt_metal::EthernetConfig{
+        .noc = noc_id,
+        .processor = risc_id,
+        .compile_args = eth_sender_ct_args};
     if (opt_level.has_value()) {
         kernel_config.opt_level = opt_level.value();
     }

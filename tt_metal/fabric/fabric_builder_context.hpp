@@ -154,6 +154,14 @@ public:
     std::optional<std::pair<uint32_t, EDMStatus>> get_fabric_router_ready_address_and_signal() const;
     std::pair<uint32_t, uint32_t> get_fabric_router_termination_address_and_signal() const;
 
+    // ============ Diagnostic Buffer Map ============
+    /** Returns the diagnostic buffer locations for all routers.
+     *  The layout is identical across all router cores in the fabric. */
+    FabricRouterDiagnosticBufferMap get_diagnostic_buffer_map() const {
+        TT_FATAL(router_config_ != nullptr, "Error, fabric router config is uninitialized");
+        return router_config_->get_diagnostic_buffer_map();
+    }
+
     // ============ Intermesh VC Configuration ============
     const IntermeshVCConfig& get_intermesh_vc_config() const { return intermesh_vc_config_; }
     bool requires_intermesh_vc() const { return intermesh_vc_config_.requires_vc1; }

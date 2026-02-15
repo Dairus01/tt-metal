@@ -12,6 +12,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_bandwidth_telemetry.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_code_profiling.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_static_channels_ct_args.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_trimming.hpp"
 #include "hostdev/fabric_telemetry_msgs.h"
 #include "api/alignment.h"
 
@@ -690,3 +691,17 @@ constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> REMOTE_RECEIVER_NUM_BUFFERS_
     NUM_RECEIVER_CHANNELS>();
 
 }  // namespace tt::tt_fabric
+
+//-------------------------------- Channel Trimming --------------------------------//
+// channel trimming is a feature that allows the router to trim channels that are not used.
+// this is useful for reducing the amount of compute needed by the router.
+
+constexpr bool ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE = get_named_compile_time_arg_val("ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE");
+constexpr size_t RESOURCE_USAGE_CAPTURE_OUTPUT_L1_ADDRESS = ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE ? get_named_compile_time_arg_val("RESOURCE_USAGE_CAPTURE_OUTPUT_L1_ADDRESS") : 0;
+
+using ChannelTrimmingUsagePtr = tt::tt_fabric::FabricDatapathUsageL1Ptr<
+    ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE,
+    RESOURCE_USAGE_CAPTURE_OUTPUT_L1_ADDRESS,
+    MAX_NUM_RECEIVER_CHANNELS,
+    MAX_NUM_SENDER_CHANNELS>;
+constexpr ChannelTrimmingUsagePtr channel_trimming_usage_recorder{};

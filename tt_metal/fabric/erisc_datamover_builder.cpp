@@ -11,6 +11,7 @@
 #include "erisc_datamover_builder.hpp"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/code_profiling_types.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_trimming_types.hpp"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
@@ -225,6 +226,7 @@ bool requires_forced_assignment_to_noc1() {
     //
     return tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE && get_num_riscv_cores() == 1;
 }
+
 }  // anonymous namespace
 
 FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topology(topology) {
@@ -257,6 +259,17 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
         next_l1_addr += code_profiling_buffer_size;
     } else {
         this->code_profiling_buffer_address = 0;  // Not allocated
+    }
+
+    // Allocate channel trimming capture buffer (conditionally enabled)
+    if (rtoptions.get_enable_channel_trimming_capture()) {
+        this->datapath_usage_l1_address = next_l1_addr;
+        this->datapath_usage_buffer_size =
+            sizeof(tt::tt_fabric::FabricDatapathUsageL1Results<true, builder_config::num_max_receiver_channels, builder_config::num_max_sender_channels>);
+        next_l1_addr += this->datapath_usage_buffer_size;
+    } else {
+        this->datapath_usage_l1_address = 0;
+        this->datapath_usage_buffer_size = 0;
     }
 
     this->handshake_addr = next_l1_addr;
@@ -885,7 +898,7 @@ void FabricEriscDatamoverBuilder::get_telemetry_compile_time_args(
  * 8) a receiver channel to pool type mapping is passed as compile time args
  */
 
-std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_t risc_id) const {
+FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_compile_time_args(uint32_t risc_id) const {
     TT_ASSERT(this->local_fabric_node_id != this->peer_fabric_node_id);
 
     // Tie break policy for selecting the handshake master:
@@ -1237,7 +1250,48 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     }
 
     ct_args.push_back(0x30c0ffee);
-    return ct_args;
+
+    // Build named compile-time args for channel trimming capture
+    std::unordered_map<std::string, uint32_t> named_args;
+    bool enable_capture = config.datapath_usage_l1_address != 0;
+    named_args["ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE"] = enable_capture ? 1 : 0;
+    if (enable_capture) {
+        named_args["RESOURCE_USAGE_CAPTURE_OUTPUT_L1_ADDRESS"] =
+            static_cast<uint32_t>(config.datapath_usage_l1_address);
+    }
+
+    return {std::move(ct_args), std::move(named_args)};
+}
+
+FabricRouterDiagnosticBufferMap FabricEriscDatamoverConfig::get_diagnostic_buffer_map() const {
+    FabricRouterDiagnosticBufferMap map;
+
+    // Perf telemetry: fixed 32-byte buffer
+    if (perf_telemetry_buffer_address != 0) {
+        map.perf_telemetry = {perf_telemetry_buffer_address, 32};
+    }
+
+    // Code profiling: size from timer type count
+    if (code_profiling_buffer_address != 0) {
+        constexpr size_t code_profiling_buffer_size =
+            get_max_code_profiling_timer_types() * sizeof(CodeProfilingTimerResult);
+        map.code_profiling = {code_profiling_buffer_address, code_profiling_buffer_size};
+    }
+
+    // Channel trimming capture
+    if (datapath_usage_l1_address != 0) {
+        map.channel_trimming_capture = {datapath_usage_l1_address, datapath_usage_buffer_size};
+    }
+
+    return map;
+}
+
+FabricEriscDatamoverBuilder::DatapathUsageBufferInfo
+FabricEriscDatamoverBuilder::get_datapath_usage_buffer_info() const {
+    return {
+        config.datapath_usage_l1_address,
+        config.datapath_usage_buffer_size,
+        config.datapath_usage_l1_address != 0};
 }
 
 std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {

@@ -646,8 +646,8 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
     const auto num_enabled_risc_cores = get_configured_risc_count();
 
     for (uint32_t risc_id = 0; risc_id < num_enabled_risc_cores; risc_id++) {
-        // Get compile-time args and append cluster-wide coordination info
-        std::vector<uint32_t> ct_args = erisc_builder_->get_compile_time_args(risc_id);
+        // Get compile-time args (positional + named) and append cluster-wide coordination info
+        auto [ct_args, named_ct_args] = erisc_builder_->get_compile_time_args(risc_id);
 
         const auto is_master_risc_core = (eth_chan == ctx.master_router_chan) && (risc_id == 0);
         ct_args.push_back(is_master_risc_core);
@@ -679,6 +679,7 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
                 .processor = proc,
                 .compile_args = ct_args,
                 .defines = defines,
+                .named_compile_args = named_ct_args,
                 .opt_level = opt_level});
 
         tt::tt_metal::SetRuntimeArgs(program, kernel, eth_logical_core, rt_args);

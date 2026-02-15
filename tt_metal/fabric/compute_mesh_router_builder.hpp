@@ -96,6 +96,10 @@ public:
 
     // ============ Compute-Mesh Specific Accessors ============
 
+    FabricEriscDatamoverBuilder::DatapathUsageBufferInfo get_datapath_usage_buffer_info() const {
+        return erisc_builder_->get_datapath_usage_buffer_info();
+    }
+
     FabricEriscDatamoverBuilder& get_erisc_builder() { return *erisc_builder_; }
     const FabricEriscDatamoverBuilder& get_erisc_builder() const { return *erisc_builder_; }
 

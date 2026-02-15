@@ -22,6 +22,8 @@
 #include <array>
 #include <cstddef>
 #include <memory>
+#include <string>
+#include <unordered_map>
 #include "builder/fabric_channel_allocator.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 #include "tt_metal/fabric/builder/connection_writer_adapter.hpp"
@@ -203,6 +205,23 @@ struct StreamRegAssignments {
     }
 };
 
+/**
+ * Unified view of all diagnostic/instrumentation buffer locations in router L1.
+ * Produced from FabricEriscDatamoverConfig; queryable via FabricBuilderContext.
+ */
+struct FabricRouterDiagnosticBufferMap {
+    struct BufferRegion {
+        size_t l1_address = 0;
+        size_t size_bytes = 0;
+
+        bool is_enabled() const { return l1_address != 0; }
+    };
+
+    BufferRegion perf_telemetry;
+    BufferRegion code_profiling;
+    BufferRegion channel_trimming_capture;
+};
+
 struct FabricEriscDatamoverConfig {
     static constexpr uint32_t WR_CMD_BUF = 0;      // for large writes
     static constexpr uint32_t RD_CMD_BUF = 1;      // for all reads
@@ -280,6 +299,12 @@ struct FabricEriscDatamoverConfig {
     // ----------- Local Tensix Relay Connection (UDM mode only)
     // Connection buffer index for the local tensix relay interface
     size_t tensix_relay_connection_buffer_index_id = 0;
+
+    size_t datapath_usage_l1_address = 0;
+    size_t datapath_usage_buffer_size = 0;
+
+    /** Returns a consolidated view of all diagnostic buffer locations in this config's L1 layout. */
+    FabricRouterDiagnosticBufferMap get_diagnostic_buffer_map() const;
 
     // Channel Allocations
     std::size_t max_l1_loading_size = 0;
@@ -506,7 +531,18 @@ public:
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t channel_id) const override;
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t vc, uint32_t ds_edm) const;
 
-    [[nodiscard]] std::vector<uint32_t> get_compile_time_args(uint32_t risc_id) const;
+    struct CompileTimeArgs {
+        std::vector<uint32_t> positional;
+        std::unordered_map<std::string, uint32_t> named;
+    };
+    [[nodiscard]] CompileTimeArgs get_compile_time_args(uint32_t risc_id) const;
+
+    struct DatapathUsageBufferInfo {
+        size_t l1_address = 0;
+        size_t buffer_size = 0;
+        bool enabled = false;
+    };
+    [[nodiscard]] DatapathUsageBufferInfo get_datapath_usage_buffer_info() const;
 
     // Helper for `get_compile_time_args`
     void get_telemetry_compile_time_args(uint32_t risc_id, std::vector<uint32_t>& ct_args) const;
