@@ -27,14 +27,14 @@
   team: models
   model-name: falcon40b
 
-- name: t3k_llama3_tests
-  cmd: run_t3000_llama3_tests
+- name: t3k_llama3.1-8b_tests
+  cmd: run_t3000_llama3.1-8b_tests
   skus:
     wh_llmbox_perf:
-      timeout: 60
+      timeout: 15
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
-  model-name: llama3
+  model-name: llama3.1-8b
 
 - name: t3k_qwen25_tests
   cmd: run_t3000_qwen25_tests

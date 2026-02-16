@@ -72,27 +72,31 @@ run_t3000_llama3_70b_dp_tests() {
   fi
 }
 
-run_t3000_llama3_tests() {
+run_t3000_llama3.1-8b_tests() {
   # Record the start time
   fail=0
   start_time=$(date +%s)
 
-  echo "LOG_METAL: Running run_t3000_llama3_tests"
+  echo "LOG_METAL: Running run_t3000_llama3.1-8b_tests"
 
-  # Llama3.1-8B
   llama8b=meta-llama/Llama-3.1-8B-Instruct
 
   tt_cache=$TT_CACHE_HOME/$llama8b
   HF_MODEL=$llama8b TT_CACHE_PATH=$tt_cache pytest models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1"; fail+=$?
-  echo "LOG_METAL: Llama3 tests for $llama8b completed"
+  echo "LOG_METAL: Llama3.1-8B tests for $llama8b completed"
 
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_llama3_tests $duration seconds to complete"
+  echo "LOG_METAL: run_t3000_llama3.1-8b_tests $duration seconds to complete"
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi
+}
+
+# Backward-compat alias
+run_t3000_llama3_tests() {
+  run_t3000_llama3.1-8b_tests
 }
 
 run_t3000_llama3.1-8b_demo_tests() {
@@ -523,8 +527,8 @@ run_t3000_gpt_oss_tests() {
 }
 
 run_t3000_tests() {
-  # Run llama3 smaller tests (1B, 3B, 8B, 11B)
-  run_t3000_llama3_tests
+  # Run llama3.1-8b tests
+  run_t3000_llama3.1-8b_tests
 
   # Run llama3 vision tests
   run_t3000_llama3_vision_tests

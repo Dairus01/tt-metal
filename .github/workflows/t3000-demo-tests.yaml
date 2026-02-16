@@ -12,7 +12,6 @@ on:
           - all
           - falcon7b
           - falcon40b
-          - llama3
           - llama3.1-8b
           - llama3_vision
           - llama3_90b_vision
