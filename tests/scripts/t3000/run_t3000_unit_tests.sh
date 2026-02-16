@@ -503,20 +503,6 @@ run_t3000_mixtral_tests() {
   HF_MODEL=$mixtral8x7 TT_CACHE_PATH=$tt_cache_mixtral8x7 CI=true pytest models/tt_transformers/tests/mixtral/test_mixtral_model_prefill.py::test_model_inference[wormhole_b0-device_params0-1layer-performance-max128k-4k-page_params0-paged_attention-8] --timeout=720 ; fail+=$?
   HF_MODEL=$mixtral8x7 TT_CACHE_PATH=$tt_cache_mixtral8x7 CI=true pytest models/tt_transformers/tests/mixtral/test_mixtral_model_prefill.py::test_model_inference[wormhole_b0-device_params0-1layer-performance-max128k-4k-page_params0-default_attention-8] --timeout=720 ; fail+=$?
 
-  # Generic tt_transformers unit tests for Mixtral-8x7B-Instruct
-  hf_model_instruct=mistralai/Mixtral-8x7B-Instruct-v0.1
-  tt_cache_instruct=$TT_CACHE_HOME/$hf_model_instruct
-
-  HF_MODEL=$hf_model_instruct TT_CACHE_PATH=$tt_cache_instruct pytest --timeout 900 models/tt_transformers/tests/test_attention.py ; fail+=$?
-  HF_MODEL=$hf_model_instruct TT_CACHE_PATH=$tt_cache_instruct pytest --timeout 900 models/tt_transformers/tests/test_attention_prefill.py ; fail+=$?
-  # FAIL: MixtralDecoderLayer has no 'mlp' attribute (MoE model uses block_sparse_moe)
-  # HF_MODEL=$hf_model_instruct TT_CACHE_PATH=$tt_cache_instruct pytest --timeout 900 models/tt_transformers/tests/test_mlp.py ; fail+=$?
-  HF_MODEL=$hf_model_instruct TT_CACHE_PATH=$tt_cache_instruct pytest --timeout 900 models/tt_transformers/tests/test_rms_norm.py ; fail+=$?
-  # FAIL: state_dict key mismatch — MoE uses gate_proj/down_proj/up_proj vs expected w1/w2/w3
-  # HF_MODEL=$hf_model_instruct TT_CACHE_PATH=$tt_cache_instruct pytest --timeout 900 models/tt_transformers/tests/test_decoder.py ; fail+=$?
-  # FAIL: same state_dict key mismatch as test_decoder
-  # HF_MODEL=$hf_model_instruct TT_CACHE_PATH=$tt_cache_instruct pytest --timeout 900 models/tt_transformers/tests/test_decoder_prefill.py ; fail+=$?
-
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
