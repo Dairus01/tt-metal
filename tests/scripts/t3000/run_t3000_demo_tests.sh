@@ -82,7 +82,7 @@ run_t3000_llama3.1-8b_tests() {
   llama8b=meta-llama/Llama-3.1-8B-Instruct
 
   tt_cache=$TT_CACHE_HOME/$llama8b
-  HF_MODEL=$llama8b TT_CACHE_PATH=$tt_cache pytest models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1"; fail+=$?
+  HF_MODEL=$llama8b TT_CACHE_PATH=$tt_cache pytest models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "performance-ci-eval-32"; fail+=$?
   echo "LOG_METAL: Llama3.1-8B tests for $llama8b completed"
 
   # Record the end time
@@ -130,7 +130,7 @@ run_t3000_qwen25_tests() {
   tt_cache_7b=$TT_CACHE_HOME/$qwen25_7b
   qwen25_72b=Qwen/Qwen2.5-72B-Instruct
   tt_cache_72b=$TT_CACHE_HOME/$qwen25_72b
-  qwen25_coder_32b=Qwen/Qwen2.5-Coder-32B
+  qwen25_coder_32b=Qwen/Qwen2.5-Coder-32B-Instruct
   tt_cache_coder_32b=$TT_CACHE_HOME/$qwen25_coder_32b
 
   MESH_DEVICE=N300 HF_MODEL=$qwen25_7b TT_CACHE_PATH=$tt_cache_7b pytest models/tt_transformers/demo/simple_text_demo.py -k "not performance-ci-stress-1" --timeout 600 || fail+=$?
