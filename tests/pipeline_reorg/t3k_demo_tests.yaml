@@ -180,6 +180,60 @@
   team: models
   model-name: qwen3_vl
 
+- name: t3k_llama3.3-70b_demo_tests
+  cmd: run_t3000_llama3.3-70b_demo_tests
+  skus:
+    wh_llmbox_perf:
+      timeout: 30
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+  model-name: llama3.3-70b
+
+- name: t3k_llama3.1-8b_demo_tests
+  cmd: run_t3000_llama3.1-8b_demo_tests
+  skus:
+    wh_llmbox_perf:
+      timeout: 15
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+  model-name: llama3.1-8b
+
+- name: t3k_qwen3-32b_demo_tests
+  cmd: run_t3000_qwen3-32b_demo_tests
+  skus:
+    wh_llmbox_perf:
+      timeout: 40
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+  model-name: qwen3-32b
+
+- name: t3k_qwen25-coder-32b_demo_tests
+  cmd: run_t3000_qwen25-coder-32b_demo_tests
+  skus:
+    wh_llmbox_perf:
+      timeout: 30
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+  model-name: qwen25-coder-32b
+
+- name: t3k_mistral_demo_tests
+  cmd: run_t3000_mistral_demo_tests
+  skus:
+    wh_llmbox_perf:
+      timeout: 30
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+  model-name: mistral
+
+- name: t3k_mixtral_demo_tests
+  cmd: run_t3000_mixtral_demo_tests
+  skus:
+    wh_llmbox_perf:
+      timeout: 60
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+  model-name: mixtral
+
 - name: t3k_gemma3_tests
   cmd: run_t3000_gemma3_tests
   skus:

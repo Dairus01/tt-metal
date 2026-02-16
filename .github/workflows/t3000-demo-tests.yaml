@@ -13,6 +13,7 @@ on:
           - falcon7b
           - falcon40b
           - llama3
+          - llama3.1-8b
           - llama3_vision
           - llama3_90b_vision
           - llama3.3-70b
@@ -27,7 +28,9 @@ on:
           - mixtral
           - whisper
           - qwen3
+          - qwen3-32b
           - qwen25
+          - qwen25-coder-32b
           - qwen25_vl
           - qwen3_vl
           - gemma3
