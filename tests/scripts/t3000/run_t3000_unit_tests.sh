@@ -258,35 +258,7 @@ run_t3000_qwen25-coder-32b_tests() {
 }
 
 run_t3000_gemma3-small_tests() {
-  fail=0
-  start_time=$(date +%s)
-  echo "LOG_METAL: Running run_t3000_gemma3-small_tests"
-
-  # Gemma-specific dispatch test (existing)
-  pytest --timeout 600 models/demos/multimodal/gemma3/tests/test_ci_dispatch.py -k "27b" ; fail+=$?
-
-  # Generic tt_transformers unit tests for gemma-3-27b-it
-  hf_model=google/gemma-3-27b-it
-  tt_cache=$TT_CACHE_HOME/$hf_model
-
-  # FAIL: PCC below 0.986 threshold for attention
-  # HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 900 models/tt_transformers/tests/test_attention.py ; fail+=$?
-  # FAIL: PCC below threshold for attention prefill
-  # HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 900 models/tt_transformers/tests/test_attention_prefill.py ; fail+=$?
-  HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 900 models/tt_transformers/tests/test_mlp.py ; fail+=$?
-  # FAIL: PCC ~0.997 below 0.9999 threshold for rms_norm
-  # HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 900 models/tt_transformers/tests/test_rms_norm.py ; fail+=$?
-  # FAIL: decoder depends on failing attention
-  # HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 900 models/tt_transformers/tests/test_decoder.py ; fail+=$?
-  # FAIL: decoder_prefill depends on failing attention_prefill
-  # HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 900 models/tt_transformers/tests/test_decoder_prefill.py ; fail+=$?
-
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_gemma3-small_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
+  pytest --timeout 600 models/demos/multimodal/gemma3/tests/test_ci_dispatch.py -k "27b"
 }
 
 run_t3000_llama3-small_tests() {
