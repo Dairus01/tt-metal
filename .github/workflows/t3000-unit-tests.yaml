@@ -25,6 +25,8 @@ on:
           - unet shallow
           - qwen25_vl
           - qwen3_vl
+          - qwen3-32b
+          - qwen25-coder-32b
           - gemma3-small
           - dits
           - deepseek
