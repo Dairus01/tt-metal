@@ -130,3 +130,56 @@ def test_run_generation_rejects_negative_max_new_tokens():
 
     assert not model.started
     assert not model.stopped
+
+
+class _LoopbackTokenizer:
+    bos_token_id = 1
+
+    def encode(self, text: str, add_special_tokens: bool = True) -> list[int]:
+        del text, add_special_tokens
+        return [self.bos_token_id]
+
+    def decode(self, token_ids: list[int], skip_special_tokens: bool = False) -> str:
+        del token_ids, skip_special_tokens
+        return ""
+
+
+@pytest.mark.slow
+@pytest.mark.skip_post_commit
+@pytest.mark.timeout(3600)
+def test_demo_decode_stress_64k_tokens(mesh_device) -> None:
+    from models.common.utility_functions import is_slow_dispatch
+    from models.demos.deepseek_v3_b1.demo.cli import (
+        create_deepseek_v3,
+        extract_token_id_from_output,
+        make_padded_input_tensor,
+    )
+    from models.demos.deepseek_v3_b1.model import TOKEN_ID_BYTES, page_size_bytes
+
+    if not is_slow_dispatch():
+        pytest.skip("Skipping stress test in fast dispatch mode")
+
+    max_new_tokens = 65536
+    batch_size = 1
+    tokenizer = _LoopbackTokenizer()
+    page_size_datums = page_size_bytes(batch_size) // TOKEN_ID_BYTES
+    model = create_deepseek_v3(mesh_device=mesh_device, batch_size=batch_size, loopback_mode=True)
+
+    result = run_generation(
+        model=model,
+        tokenizer=tokenizer,
+        prompt="",
+        max_new_tokens=max_new_tokens,
+        make_input_tensor=lambda token_id: make_padded_input_tensor(
+            token_id,
+            batch_size=batch_size,
+            page_size_datums=page_size_datums,
+        ),
+        extract_token_id=extract_token_id_from_output,
+        write_text=lambda _: None,
+    )
+
+    assert len(result.generated_token_ids) == max_new_tokens
+    assert result.generated_token_ids[0] == tokenizer.bos_token_id
+    assert result.generated_token_ids[-1] == tokenizer.bos_token_id
+    assert model.position == 1 + max_new_tokens
