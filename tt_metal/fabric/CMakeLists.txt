@@ -55,6 +55,7 @@ target_sources(
         builder/multi_pool_channel_allocator.cpp
         builder/connection_registry.cpp
         builder/router_connection_mapping.cpp
+        channel_trimming_export.cpp
         fabric.cpp
         fabric_init.cpp
         fabric_host_utils.cpp

@@ -18,6 +18,7 @@
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/fabric/fabric_types.hpp>
 #include <experimental/fabric/fabric.hpp>
+#include "fabric/channel_trimming_export.hpp"
 #include "fabric/fabric_context.hpp"
 #include "fabric/fabric_builder_context.hpp"
 
@@ -1026,6 +1027,8 @@ bool DeviceManager::close_devices(const std::vector<IDevice*>& devices, bool /*s
             }
         }
     }
+
+    tt::tt_fabric::export_channel_trimming_capture();
 
     for (const ChipId device_id : devices_to_close) {
         IDevice* device = this->get_active_device(device_id);
