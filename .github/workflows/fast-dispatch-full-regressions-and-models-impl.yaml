@@ -47,7 +47,7 @@ jobs:
           STABLE='[
             {"model":"common_models"},
             {"model":"functional_unet"},
-            {"model":"ttt-llama3.2-1B"},
+            {"model":"ttt-llama3.1-8B"},
             {"model":"qwen25_vl-3B"},
             {"model":"resnet50"},
             {"model":"whisper"},
