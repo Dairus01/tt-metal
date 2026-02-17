@@ -5,6 +5,8 @@
 #pragma once
 
 #include "internal/debug/watcher_common.h"
+#include "core_config.h"
+#include "dev_mem_map.h"
 
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT) && !defined(FORCE_WATCHER_OFF)
 
@@ -14,7 +16,21 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type =
     if (v->tripped == DebugAssertOK) {
         v->line_num = line_num;
         v->tripped = assert_type;
-        v->which = PROCESSOR_INDEX;
+        std::uint64_t cpu_index = 0;
+#if defined(ARCH_QUASAR)
+        // TODO: The below code is recurring on Quasar.
+        // It needs to be in a get_cpu_idx() API for Quasar
+#if defined(COMPILE_FOR_TRISC)
+        std::uint32_t neo_id = ckernel::csr_read<ckernel::CSR::NEO_ID>();
+        std::uint32_t trisc_id = ckernel::csr_read<ckernel::CSR::TRISC_ID>();
+        cpu_index = MaxDMProcessorsPerCoreType + NUM_TRISC_CORES * neo_id + trisc_id;  // after 8 DM cores
+#else
+        asm volatile("csrr %0, mhartid" : "=r"(cpu_index));
+#endif
+#else
+        cpu_index = PROCESSOR_INDEX;
+#endif
+        v->which = cpu_index;
     }
 
     // Hang, or in the case of erisc, early exit.
