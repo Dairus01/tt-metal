@@ -215,15 +215,13 @@ def test_forward_pass(
         tt_output = MLPClass.forward_prefill(tt_input_gathered, run_config)
     else:  # decode
         tt_output = MLPClass.forward_decode(tt_input_gathered, run_config)
+        # In decode mode, forward_decode does not deallocate its input, so we do it here.
+        ttnn.deallocate(tt_input_gathered)
 
     # Perform reduce_scatter after forward pass
     tt_output = ttnn.experimental.reduce_scatter_minimal_async(
         tt_output, **ccl.populate_reduce_scatter_runtime_args(run_config["reduce_scatter_async"])
     )
-
-    # Cleanup gathered input
-    ttnn.deallocate(tt_input_gathered)
-
     # Verify output memory config matches expected
     expected_output_memory_config = run_config["output_memory_config"]
     actual_output_memory_config = tt_output.memory_config()
