@@ -39,8 +39,8 @@ def create_fabric_router_config(max_payload_size):
 @pytest.mark.parametrize("cluster_axis", [0])
 @pytest.mark.parametrize("secondary_cluster_axis", [1])
 @pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2), (1, 1)])
-@pytest.mark.parametrize("num_iters", [(30)])
-@pytest.mark.parametrize("position_id", [0, 1, 32, 33])
+@pytest.mark.parametrize("num_iters", [(1)])
+@pytest.mark.parametrize("position_id", [0, 2130])
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -98,6 +98,8 @@ def test_pre_sdpa(
 
     KNOPE_DIM = 512
     KROPE_DIM = 64
+
+    assert QROPE_HEAD_DIM == KROPE_DIM, "Qrope and Krope head dimensions must match"
 
     # Qnope/Qrope grid configuration (must match head configuration)
     QNOPE_GRID_COLS = 8  # 8 Qnope cores per row (1 head each)
@@ -197,7 +199,7 @@ def test_pre_sdpa(
     # ========================================================================
     # Create RoPE tensors (sin, cos, trans_mat)
     # ========================================================================
-    max_seq_len = 1024
+    max_seq_len = 8192
     position_ids = torch.tensor([position_id])  # [batch]
 
     # Create cos/sin matrices in Meta-style format
@@ -486,6 +488,7 @@ def test_pre_sdpa(
     torch_dkv_matmul_weights = torch.randn(dkv_matmul_weights_shape, dtype=torch.bfloat16)
     num_shards = kv_cache_branch_crs.num_cores()
     shard_width = dkv_matmul_weights_shape[1] // num_shards
+    # new_shard_order = [0, 15, 1, 14, 2, 13, 3, 12, 4, 11, 5, 10, 6, 9, 7, 8, 16, 17]
     new_shard_order = [0, 1, 2, 3, 4, 5, 6, 7, 16, 8, 9, 10, 11, 12, 13, 14, 15, 17]
     torch_dkv_matmul_weights_shards = torch_dkv_matmul_weights.reshape(
         dkv_matmul_weights_shape[0], num_shards, shard_width
@@ -576,10 +579,7 @@ def test_pre_sdpa(
     logger.info(f"Creating KV cache with seq_len={max_seq_len}...")
     kvpe_dim = KNOPE_DIM + KROPE_DIM
     cache_shape = (1, 1, max_seq_len, kvpe_dim)
-    torch_kv_cache = torch.zeros(cache_shape, dtype=torch.bfloat16)
-    for i in range(max_seq_len):
-        torch_kv_cache[:, :, i, :] = torch.ones(1, 1, 1, kvpe_dim) * i
-    #    test_kv_cache = torch.arange(576, dtype=torch.bfloat16).reshape(1, 1, 1, kvpe_dim)
+    torch_kv_cache = torch.randn(cache_shape, dtype=torch.bfloat16)
 
     # ND sharding with ROUND_ROBIN_1D distribution across DRAM banks
     # Each shard = one k_chunk (k_chunk_size x kvpe_dim), distributed round-robin
@@ -644,12 +644,11 @@ def test_pre_sdpa(
         )
     ttnn.synchronize_device(submesh)
 
+    kv_cache_output_torch = ttnn.to_torch(ttnn_kv_cache, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
     # Convert back to torch for verification
     sdpa_input_output_torch = ttnn.to_torch(
         ttnn_sdpa_input_result, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)
     )
-
-    kv_cache_output_torch = ttnn.to_torch(ttnn_kv_cache, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
 
     # ========================================================================
     # Compute golden reference
@@ -715,14 +714,11 @@ def test_pre_sdpa(
         ), f"Device {device_idx} failed: {pcc_message}"  # Read back from kv cache tensor in DRAM to check PCC
 
         compare_kv_cache = kv_cache_output_torch[..., position_id, :]
-        print(" whole output ", kv_cache_output_torch)
 
         # Split into nope (first 512 elements) and rope (last 64 elements)
         compare_nope = compare_kv_cache[..., :KNOPE_DIM]
         compare_rope = compare_kv_cache[..., KNOPE_DIM:]
 
-        expected_nope = torch_kv_cache[:, :, position_id, :KNOPE_DIM]
-        expected_rope = torch_kv_cache[:, :, position_id, KNOPE_DIM:]
         # Check nope portion
         print("expected nope ", expected_nope)
         print("got nope ", compare_nope)

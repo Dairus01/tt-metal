@@ -1070,8 +1070,6 @@ FORCE_INLINE void noc_async_read_page(
     if constexpr (enable_noc_tracing) {
         RECORD_NOC_EVENT_WITH_ID(NocEventType::READ, dst_local_l1_addr, id, addrgen, offset, page_size, -1, false, noc);
     }
-    DPRINT << " REading from 0x" << HEX() << addrgen.get_noc_addr(id, offset, noc) << " to " << HEX()
-           << dst_local_l1_addr << ENDL();
     noc_async_read<NOC_MAX_BURST_SIZE + 1, false>(
         addrgen.get_noc_addr(id, offset, noc), dst_local_l1_addr, page_size, noc);
 }
@@ -1254,7 +1252,6 @@ FORCE_INLINE void noc_async_write_page(
             posted,
             noc);
     }
-    DPRINT << "Writing to 0x" << HEX() << addrgen.get_noc_addr(id, offset, noc) << ENDL();
     noc_async_write<NOC_MAX_BURST_SIZE + 1, false, posted>(
         src_local_l1_addr, addrgen.get_noc_addr(id, offset, noc), size ? size : page_size, noc);
 }

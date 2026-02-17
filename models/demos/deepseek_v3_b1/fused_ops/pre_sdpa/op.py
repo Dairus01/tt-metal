@@ -1507,7 +1507,7 @@ class PreSDPA:
                     buffer_index=krope_output_cb,
                     data_format=data_format,
                     page_size=krope_tile_size,
-                    tile=tile_descriptor,
+                    tile=ttnn.TileDescriptor(TILE_1x32),
                 )
                 krope_output_cb_descriptor = ttnn.CBDescriptor(
                     total_size=1 * krope_tile_size,

@@ -47,6 +47,8 @@ void kernel_main() {
         .kv_rmsnorm_output_cb = get_named_compile_time_arg_val("kv_rmsnorm_output_cb"),
         .krope_output_cb = get_named_compile_time_arg_val("krope_output_cb"),
     };
+
+    compute_kernel_hw_startup(0, 0, 0);
 #endif
 
     deepseek_b1_ops::KVCacheUpdate::Op<Core::is_nope_core, Core::is_rope_core> op;

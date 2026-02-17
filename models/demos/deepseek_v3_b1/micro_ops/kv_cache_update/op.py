@@ -86,8 +86,6 @@ class KVCacheUpdate:
 
         kv_cache_page_size = TILE_32x32.get_tile_size(ttnn.bfloat8_b)
         intermed_page_size = TILE_32x32.get_tile_size(ttnn.bfloat16)
-        kv_rmsnorm_page_size = TILE_16x32.get_tile_size(ttnn.bfloat16)
-        krope_page_size = TILE_1x32.get_tile_size(ttnn.bfloat16)
 
         kv_cache_input_cb_format = ttnn.CBFormatDescriptor(
             buffer_index=KV_CACHE_INPUT_CB,
@@ -108,9 +106,11 @@ class KVCacheUpdate:
             tile=ttnn.TileDescriptor(TILE_32x32),
         )
 
+        kv_rmsnorm_output_cb_format = ttnn.cb_descriptor_from_sharded_tensor(KV_RMSNORM_OUTPUT_CB, nope_cache_tensor)
+
         # Output CB: tensor-backed on nope core when output_tensor provided, else L1-only
         cbs = [
-            ttnn.cb_descriptor_from_sharded_tensor(KV_RMSNORM_OUTPUT_CB, nope_cache_tensor),
+            kv_rmsnorm_output_cb_format,
             ttnn.cb_descriptor_from_sharded_tensor(KROPE_OUTPUT_CB, rope_cache_tensor),
             ttnn.cb_descriptor_from_sharded_tensor(OUTPUT_CB, output_tensor),
             ttnn.CBDescriptor(

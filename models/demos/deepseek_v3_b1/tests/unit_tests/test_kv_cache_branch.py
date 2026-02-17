@@ -324,7 +324,7 @@ def test_kv_cache_branch(device, epsilon, use_fp32, position_id):
     logger.info("✓ KV cache branch test passed!)")
 
 
-@pytest.mark.parametrize("position_id", [0, 7, 34, 128, 1130])
+@pytest.mark.parametrize("position_id", [0, 1, 34, 128, 1130])
 def test_kv_cache_dram_shard(device, position_id):
     """Test KV cache shard untilize tilize operation"""
     torch.manual_seed(0)
@@ -334,15 +334,16 @@ def test_kv_cache_dram_shard(device, position_id):
     rope_core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(8, 8), ttnn.CoreCoord(8, 9))})
 
     # Input to nope kcache core
-    torch_nope_cache = torch.randn(16, 32, dtype=torch.bfloat16)
+    #    torch_nope_cache = torch.randn(16, 32, dtype=torch.bfloat16)
+    torch_nope_cache = torch.arange(512, dtype=torch.bfloat16)
     input_shard_spec = ttnn.ShardSpec(
         nope_core_grid,
-        (16, 32),
+        (1, 512),
         ttnn.ShardOrientation.ROW_MAJOR,
     )
     input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec)
 
-    tile = ttnn.Tile([16, 32])
+    tile = ttnn.Tile([1, 32])
     # Create TTNN input tensor with WIDTH_SHARDED memory and tiny tile
     ttnn_nope_cache = ttnn.from_torch(
         torch_nope_cache,
@@ -392,7 +393,9 @@ def test_kv_cache_dram_shard(device, position_id):
     logger.info(f"Creating KV cache with seq_len={max_seq_len}...")
     kvpe_dim = 576
     cache_shape = (1, 1, max_seq_len, kvpe_dim)
-    torch_kv_cache = torch.zeros(cache_shape, dtype=torch.bfloat16)
+    torch_kv_cache = torch.randn(cache_shape, dtype=torch.bfloat16)
+    # for i in range(max_seq_len):
+    #   torch_kv_cache[:, :, i, :] = torch.arange(576, dtype=torch.bfloat16).reshape(1, 1, 1, 576) * i
 
     # ND sharding with ROUND_ROBIN_1D distribution across DRAM banks
     # Each shard = one k_chunk (k_chunk_size x kvpe_dim), distributed round-robin
@@ -428,7 +431,6 @@ def test_kv_cache_dram_shard(device, position_id):
     compare_kv_cache = torch_kv_cache_output[:, :, position_id]
     # Split into nope (first 512 elements) and rope (last 64 elements)
     nope_dim = 512
-    rope_dim = 64
 
     compare_nope = compare_kv_cache[..., :nope_dim]
     compare_rope = compare_kv_cache[..., nope_dim:]
@@ -467,5 +469,7 @@ def test_kv_cache_dram_shard(device, position_id):
         full_unupdated_kv_cache_output, full_unupdated_kv_cache, 0.98
     )
     logger.info(f"Full KV cache PCC: {full_unupdated_kv_cache_pcc_message}")
+
+    assert full_unupdated_kv_cache_pcc, f"Full KV cache PCC verification failed: {full_unupdated_kv_cache_pcc_message}"
 
     logger.info("✓ KV cache dram shard test passed!)")
