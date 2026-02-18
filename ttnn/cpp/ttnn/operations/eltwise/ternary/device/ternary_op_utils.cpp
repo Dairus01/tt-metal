@@ -152,7 +152,7 @@ TernaryKernelConfig::TernaryKernelConfig(
     TT_FATAL(false, "Invalid ternary operation type, variant or broadcast type combination");
 }
 
-std::string get_kernel_file_path(KernelName kernel_name, bool is_fpu) {
+std::string get_kernel_file_path(KernelName kernel_name, bool is_fpu, std::optional<DataType> dtype) {
     constexpr std::string_view root = "ttnn/cpp/ttnn/operations/eltwise/ternary/device/kernels";
     constexpr std::string_view dataflow = "{}/dataflow/{}";
     constexpr std::string_view compute = "{}/compute/{}";
@@ -182,20 +182,45 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_fpu) {
         case KernelName::ComputeBcastTTS_TST:
             return fmt::format(compute, root, "ternary_sfpu_col_scalar_bcast_tts_tst.cpp");
         case KernelName::ComputeNoBcastTTS_TST: return fmt::format(compute, root, "ternary_sfpu_no_bcast_tts_tst.cpp");
-        case KernelName::ComputeNoBcastAddcOp: return fmt::format(compute, root, "ternary_addc_ops_sfpu.cpp");
-        case KernelName::ComputeBcastAddcOp: return fmt::format(compute, root, "ternary_addc_ops_sfpu_bcast.cpp");
+        case KernelName::ComputeNoBcastAddcOp:
+            if (dtype == DataType::INT32) {
+                return fmt::format(compute, root, "ternary_addcmul_int_sfpu.cpp");
+            }
+            return fmt::format(compute, root, "ternary_addc_ops_sfpu.cpp");
+        case KernelName::ComputeBcastAddcOp:
+            if (dtype == DataType::INT32) {
+                return fmt::format(compute, root, "ternary_addcmul_int_sfpu_bcast.cpp");
+            }
+            return fmt::format(compute, root, "ternary_addc_ops_sfpu_bcast.cpp");
         case KernelName::ComputeRowBcastAddcOp:
+            if (dtype == DataType::INT32) {
+                return fmt::format(compute, root, "ternary_addcmul_int_sfpu_bcast.cpp");
+            }
             return fmt::format(
                 compute, root, is_fpu ? "ternary_addc_ops_fpu_rowbcast.cpp" : "ternary_addc_ops_sfpu.cpp");
         default: __builtin_unreachable();
     }
 }
 
-uint32_t pack_scalar_runtime_arg(const float scalar, const DataType dtype) {
+inline uint32_t pack_scalar_runtime_arg_float(const float scalar, const DataType dtype) {
     if (dtype == DataType::INT32) {
         return std::bit_cast<uint32_t>(static_cast<int32_t>(scalar));
     }
     return std::bit_cast<uint32_t>(scalar);
+}
+
+uint32_t pack_scalar_runtime_arg(const ScalarVariant scalar, const DataType dtype) {
+    return std::visit(
+        [dtype](auto&& v) -> uint32_t {
+            using T = std::decay_t<decltype(v)>;
+            if constexpr (std::is_same_v<T, float>) {
+                return pack_scalar_runtime_arg_float(v, dtype);
+            } else {
+                static_assert(std::is_same_v<T, int32_t> || std::is_same_v<T, uint32_t>);
+                return std::bit_cast<uint32_t>(v);
+            }
+        },
+        scalar);
 }
 
 std::map<std::string, std::string> make_dataflow_defines(
