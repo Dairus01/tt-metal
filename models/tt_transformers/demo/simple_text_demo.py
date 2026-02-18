@@ -1067,7 +1067,8 @@ def test_demo_text(
                 prompt_lens=decoding_pos,
                 sampling_params=prefill_sampling_params,
             )
-            if prefill_sampling_params is not None:
+            # Check if sampling was actually executed (returns tuple) or just logits (batched prefill case)
+            if prefill_sampling_params is not None and isinstance(prefill_out, tuple):
                 prefilled_token, prefill_log_probs = prefill_out
             else:
                 logits = prefill_out

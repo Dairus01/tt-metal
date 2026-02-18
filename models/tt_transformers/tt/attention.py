@@ -788,7 +788,15 @@ class Attention(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         kv_cache=None,
+        batch_size=1,
+        user_id_tensor=None,
     ):
+        # For batched prefill, x_11SH has shape [B, 1, S, H] where B is batch_size
+        # Following 70B Galaxy: concat before QKV matmul, then reshape back to batch after
+        if batch_size > 1:
+            # Concatenate batch dimension into sequence for matmul compatibility
+            x_11SH = ttnn.reshape(x_11SH, [1, 1, x_11SH.shape[-2] * x_11SH.shape[-3] * x_11SH.shape[-4], -1])
+
         seq_len = x_11SH.shape[-2]
         assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
         ###
@@ -825,6 +833,10 @@ class Attention(LightweightModule):
 
         if seq_len > self.MAX_QKV_MM_SEQ_LEN:
             xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
+
+        # For batched prefill, reshape back to [batch_size, 1, seq_len_per_user, dim]
+        if batch_size > 1:
+            xqkv_fused = ttnn.reshape(xqkv_fused, [batch_size, 1, seq_len // batch_size, -1])
 
         ttnn.deallocate(x_11SH)
 
@@ -909,6 +921,29 @@ class Attention(LightweightModule):
             # If chunked prefill, use chunk_page_table if given, otherwise use page_table.
             fill_page_table = chunk_page_table if chunk_page_table is not None else page_table
 
+        if batch_size > 1 and page_table:
+            # For batched prefill, loop over VALID users only and fill each user's cache separately
+            # k_fill/v_fill have shape [padded_batch, n_kv_heads, seq_len_per_user, head_dim]
+            seq_len_per_user = k_fill.shape[2]
+            page_len = fill_page_table.shape[1] * block_size
+
+            # user_id is a list of valid slot indices for batched prefill
+            valid_slots = user_id if isinstance(user_id, (list, tuple)) else list(range(batch_size))
+
+            for slot_idx in valid_slots:
+                # Extract this slot's K/V slice: [1, n_kv_heads, seq_len_per_user, head_dim]
+                k_user = k_fill[slot_idx : slot_idx + 1, :, :, :]
+                v_user = v_fill[slot_idx : slot_idx + 1, :, :, :]
+
+                # Slice to page length if needed
+                k_user_sliced = k_user[:, :, :page_len, :] if page_len < seq_len_per_user else k_user
+                v_user_sliced = v_user[:, :, :page_len, :] if page_len < seq_len_per_user else v_user
+
+                # Fill cache for this specific slot with scalar batch_idx
+                ttnn.experimental.paged_fill_cache(keys_BKSD, k_user_sliced, fill_page_table, batch_idx=slot_idx)
+                ttnn.experimental.paged_fill_cache(values_BKSD, v_user_sliced, fill_page_table, batch_idx=slot_idx)
+        elif page_table:
+            # Single user path with page_table
             page_len = fill_page_table.shape[1] * block_size
             k_fill_sliced = k_fill[:, :, :page_len, :] if page_len < k_fill.shape[2] else k_fill
             v_fill_sliced = v_fill[:, :, :page_len, :] if page_len < v_fill.shape[2] else v_fill
@@ -946,6 +981,9 @@ class Attention(LightweightModule):
                 program_config=self.args.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, chunk_start_idx, None),
             )
         else:
+            # For batched prefill, the actual per-user seq_len is seq_len // batch_size
+            # since the tensors have shape [batch_size, n_heads, seq_len_per_user, head_dim]
+            sdpa_seq_len = seq_len // batch_size if batch_size > 1 else seq_len
             attn_output_84SD = ttnn.transformer.scaled_dot_product_attention(
                 q_heads_1QSD_8b,
                 k_heads_1KSD_8b,
@@ -954,7 +992,7 @@ class Attention(LightweightModule):
                 sliding_window_size=self.sliding_window,
                 scale=self.scale,
                 compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
-                program_config=self.args.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, None, None),
+                program_config=self.args.get_attn_sdpa_program_config(Mode.PREFILL, sdpa_seq_len, None, None),
             )
 
         # deallocate keys and values
@@ -962,7 +1000,12 @@ class Attention(LightweightModule):
         ttnn.deallocate(k_heads_1KSD_8b)
         ttnn.deallocate(v_heads_1VSD_8b)
 
-        attn_output_1QSD = ttnn.reshape(attn_output_84SD, [1, self.n_local_heads, -1, self.head_dim])
+        # For single-user prefill, reshape to expected format for nlp_concat_heads
+        # For batched prefill (batch_size > 1), skip this reshape - nlp_concat_heads handles [B, H, S, D]
+        if batch_size == 1:
+            attn_output_1QSD = ttnn.reshape(attn_output_84SD, [1, self.n_local_heads, -1, self.head_dim])
+        else:
+            attn_output_1QSD = attn_output_84SD
 
         ###
         # Output matmul
@@ -972,6 +1015,13 @@ class Attention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(attn_output_1QSD)
+
+        # For batched prefill, reshape to concatenate batch dimension into sequence
+        # This MUST happen AFTER nlp_concat_heads to preserve correct data layout
+        # nlp_concat_heads outputs [B, 1, S_per_user, H*D], reshape to [1, 1, B*S, H*D]
+        if batch_size > 1:
+            attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, 1, seq_len, -1])
+
         # reshaping long sequence to matmul fit on device
         if seq_len > 1024:
             attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // 1024, 1024, -1])
@@ -1031,6 +1081,8 @@ class Attention(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         kv_cache=None,
+        batch_size=1,
+        user_id_tensor=None,
     ):
         if mode == Mode.PREFILL:
             return self.forward_prefill(
@@ -1041,6 +1093,8 @@ class Attention(LightweightModule):
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
                 kv_cache=kv_cache,
+                batch_size=batch_size,
+                user_id_tensor=user_id_tensor,
             )
         else:
             return self.forward_decode(x, current_pos, rot_mats, page_table=page_table, kv_cache=kv_cache)
