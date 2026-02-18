@@ -696,6 +696,15 @@ constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> REMOTE_RECEIVER_NUM_BUFFERS_
 // channel trimming is a feature that allows the router to trim channels that are not used.
 // this is useful for reducing the amount of compute needed by the router.
 
+// RX channel forwarding disable flags (from imported trimming profile)
+constexpr bool disable_rx_ch0_forwarding = get_named_compile_time_arg_val("DISABLE_RX_CH0_FORWARDING") != 0;
+constexpr bool disable_rx_ch1_forwarding = get_named_compile_time_arg_val("DISABLE_RX_CH1_FORWARDING") != 0;
+constexpr std::array<bool, MAX_NUM_RECEIVER_CHANNELS> is_receiver_channel_forwarding_disabled = {
+    disable_rx_ch0_forwarding,
+    disable_rx_ch1_forwarding
+};
+
+
 constexpr bool ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE = get_named_compile_time_arg_val("ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE");
 constexpr size_t RESOURCE_USAGE_CAPTURE_OUTPUT_L1_ADDRESS = ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE ? get_named_compile_time_arg_val("RESOURCE_USAGE_CAPTURE_OUTPUT_L1_ADDRESS") : 0;
 

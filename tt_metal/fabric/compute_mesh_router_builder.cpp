@@ -7,6 +7,7 @@
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
+#include "tt_metal/fabric/channel_trimming_import.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
 #include "tt_metal/fabric/builder/fabric_core_placement.hpp"
 #include "impl/context/metal_context.hpp"
@@ -140,6 +141,17 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
         actual_receiver_channels_per_vc[vc] = 1;  // Always 1 receiver per VC (when VC exists)
     }
 
+    // Look up channel trimming overrides for this router (if a profile is loaded)
+    std::optional<ChannelTrimmingOverrides> channel_trimming_overrides_for_router;
+    const auto& trimming_overrides = builder_context.get_channel_trimming_overrides();
+    if (trimming_overrides.has_value()) {
+        auto key = make_override_key(device->id(), location.eth_chan);
+        auto it = trimming_overrides->find(key);
+        if (it != trimming_overrides->end()) {
+            channel_trimming_overrides_for_router = it->second;
+        }
+    }
+
     // NOW create erisc builder with computed injection flags and actual channel counts
     auto edm_builder = std::make_unique<FabricEriscDatamoverBuilder>(FabricEriscDatamoverBuilder::build(
         device,
@@ -153,7 +165,8 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
         eth_direction,
         downstream_is_tensix_builder,
         actual_sender_channels_per_vc,
-        actual_receiver_channels_per_vc));
+        actual_receiver_channels_per_vc,
+        channel_trimming_overrides_for_router));
 
     if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::BLACKHOLE &&
         tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode()) {

@@ -27,6 +27,7 @@
 #include "builder/fabric_channel_allocator.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 #include "tt_metal/fabric/builder/connection_writer_adapter.hpp"
+#include "tt_metal/fabric/channel_trimming_import.hpp"
 #include "tt_metal/fabric/fabric_datamover_builder_base.hpp"
 
 namespace tt::tt_fabric {
@@ -493,7 +494,8 @@ public:
         bool build_in_worker_connection_mode = false,
         bool has_tensix_extension = false,
         std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_sender_channels_per_vc = std::nullopt,
-        std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_receiver_channels_per_vc = std::nullopt);
+        std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_receiver_channels_per_vc = std::nullopt,
+        std::optional<ChannelTrimmingOverrides> channel_trimming_overrides = std::nullopt);
 
     static FabricEriscDatamoverBuilder build(
         tt::tt_metal::IDevice* device,
@@ -507,7 +509,8 @@ public:
         eth_chan_directions direction = eth_chan_directions::EAST,
         bool has_tensix_extension = false,
         std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_sender_channels_per_vc = std::nullopt,
-        std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_receiver_channels_per_vc = std::nullopt);
+        std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_receiver_channels_per_vc = std::nullopt,
+        std::optional<ChannelTrimmingOverrides> channel_trimming_overrides = std::nullopt);
 
     static FabricEriscDatamoverBuilder build(
         tt::tt_metal::IDevice* device,
@@ -521,7 +524,8 @@ public:
         eth_chan_directions direction = eth_chan_directions::EAST,
         bool has_tensix_extension = false,
         std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_sender_channels_per_vc = std::nullopt,
-        std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_receiver_channels_per_vc = std::nullopt);
+        std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_receiver_channels_per_vc = std::nullopt,
+        std::optional<ChannelTrimmingOverrides> channel_trimming_overrides = std::nullopt);
 
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_worker_channel() const;
     // Overload that accepts VC, absolute channel ID, and VC-relative channel ID
@@ -633,6 +637,13 @@ private:
     // Per-RISC channel servicing flags [risc_id][channel_id]
     std::array<std::array<bool, builder_config::num_max_sender_channels>, builder_config::MAX_NUM_VCS> is_sender_channel_serviced_{};
     std::array<std::array<bool, builder_config::num_max_receiver_channels>, builder_config::MAX_NUM_VCS> is_receiver_channel_serviced_{};
+
+    // Apply channel trimming overrides: disables unused sender/receiver channels
+    // and stores overrides for compile-time arg generation (RX forwarding disable flags).
+    void apply_channel_trimming_overrides(const ChannelTrimmingOverrides& overrides);
+
+    // Channel trimming overrides (from imported profile)
+    std::optional<ChannelTrimmingOverrides> channel_trimming_overrides_;
 
     // first level acks are acknowledgement credits sent from receiver to sender channels on receipt of packets
     // and can be used to know when the sender is able to recover a buffer slot in the channel, for new data from

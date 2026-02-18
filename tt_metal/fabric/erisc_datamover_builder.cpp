@@ -692,7 +692,8 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     bool build_in_worker_connection_mode,
     bool has_tensix_extension,
     std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_sender_channels_per_vc,
-    std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_receiver_channels_per_vc) :
+    std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_receiver_channels_per_vc,
+    std::optional<ChannelTrimmingOverrides> channel_trimming_overrides) :
     FabricDatamoverBuilderBase(my_noc_x, my_noc_y, direction),
     my_eth_core_logical(my_eth_core_logical),
     my_eth_channel(my_eth_core_logical.y),
@@ -791,6 +792,11 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
                 }
             }
         }
+    }
+
+    // Apply channel trimming overrides (from imported profile) after normal initialization
+    if (channel_trimming_overrides.has_value()) {
+        apply_channel_trimming_overrides(channel_trimming_overrides.value());
     }
 
     std::fill(
@@ -1260,6 +1266,17 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
             static_cast<uint32_t>(config.datapath_usage_l1_address);
     }
 
+    // Named compile-time args for channel trimming profile import (RX forwarding disable)
+    if (channel_trimming_overrides_.has_value()) {
+        named_args["DISABLE_RX_CH0_FORWARDING"] =
+            channel_trimming_overrides_->is_receiver_channel_data_forwarded(0) ? 0 : 1;
+        named_args["DISABLE_RX_CH1_FORWARDING"] =
+            channel_trimming_overrides_->is_receiver_channel_data_forwarded(1) ? 0 : 1;
+    } else {
+        named_args["DISABLE_RX_CH0_FORWARDING"] = 0;
+        named_args["DISABLE_RX_CH1_FORWARDING"] = 0;
+    }
+
     return {std::move(ct_args), std::move(named_args)};
 }
 
@@ -1358,7 +1375,8 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     eth_chan_directions direction,
     bool has_tensix_extension,
     std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_sender_channels_per_vc,
-    std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_receiver_channels_per_vc) {
+    std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_receiver_channels_per_vc,
+    std::optional<ChannelTrimmingOverrides> channel_trimming_overrides) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     log_debug(
         tt::LogFabric,
@@ -1381,7 +1399,8 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
         direction,
         has_tensix_extension,
         actual_sender_channels_per_vc,
-        actual_receiver_channels_per_vc);
+        actual_receiver_channels_per_vc,
+        channel_trimming_overrides);
 }
 
 FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
@@ -1396,7 +1415,8 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     eth_chan_directions direction,
     bool has_tensix_extension,
     std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_sender_channels_per_vc,
-    std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_receiver_channels_per_vc) {
+    std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_receiver_channels_per_vc,
+    std::optional<ChannelTrimmingOverrides> channel_trimming_overrides) {
     std::array<size_t, builder_config::num_max_sender_channels> sender_channels_buffer_index_semaphore_id{};
     std::array<size_t, builder_config::num_max_sender_channels> sender_channels_flow_control_semaphore_id{};
     std::array<size_t, builder_config::num_max_sender_channels> sender_channels_connection_semaphore_id{};
@@ -1484,7 +1504,8 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
         build_in_worker_connection_mode,
         has_tensix_extension,
         actual_sender_channels_per_vc,
-        actual_receiver_channels_per_vc);
+        actual_receiver_channels_per_vc,
+        channel_trimming_overrides);
 }
 
 SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_channel(
@@ -1623,5 +1644,33 @@ void FabricEriscDatamoverBuilder::set_wait_for_host_signal(bool wait_for_host_si
 
 void FabricEriscDatamoverBuilder::set_firmware_context_switch_type(FabricEriscDatamoverContextSwitchType type) {
     this->firmware_context_switch_type = type;
+}
+
+void FabricEriscDatamoverBuilder::apply_channel_trimming_overrides(const ChannelTrimmingOverrides& overrides) {
+    this->channel_trimming_overrides_ = overrides;
+
+    // Disable sender channels that were not used (bit clear in bitfield)
+    for (auto& risc_channels : this->is_sender_channel_serviced_) {
+        for (size_t ch = 0; ch < risc_channels.size(); ch++) {
+            if (!overrides.is_sender_channel_used(ch)) {
+                risc_channels[ch] = false;
+            }
+        }
+    }
+
+    // Disable receiver channels that did not forward data (bit clear in bitfield)
+    for (auto& risc_channels : this->is_receiver_channel_serviced_) {
+        for (size_t ch = 0; ch < risc_channels.size(); ch++) {
+            if (!overrides.is_receiver_channel_data_forwarded(ch)) {
+                risc_channels[ch] = false;
+            }
+        }
+    }
+
+    log_debug(
+        tt::LogFabric,
+        "Applied channel trimming overrides: sender_used=0x{:04X} rx_fwd=0x{:04X}",
+        overrides.sender_channel_used_bitfield_by_vc,
+        overrides.receiver_channel_data_forwarded_bitfield_by_vc);
 }
 }  // namespace tt::tt_fabric

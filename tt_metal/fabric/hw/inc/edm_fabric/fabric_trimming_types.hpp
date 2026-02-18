@@ -4,9 +4,9 @@
 
 #pragma once
 
-// Host+device compatible header: pure data layout for datapath usage capture.
-// No methods, no device-specific includes.
-// All functions that operate on this struct are in fabric_trimming.hpp (device-only).
+// Host+device compatible header: data layout and query accessors for datapath usage capture.
+// No device-specific includes.
+// Mutation helpers (set/update) are free functions in fabric_trimming.hpp (device-only).
 
 #include <array>
 #include <cstdint>
@@ -37,6 +37,24 @@ struct FabricDatapathUsageL1Results {
 
     // A bit is set high if the receiver channel on this VC forwards a noc message of that type
     std::array<NocSendTypeBitfield, NUM_VC> used_noc_send_type_by_vc_bitfield = {};
+
+    // Query accessors
+    bool is_sender_channel_used(size_t sender_channel_id) const {
+        return (sender_channel_used_bitfield_by_vc & (1u << sender_channel_id)) != 0;
+    }
+    bool is_receiver_channel_data_forwarded(size_t receiver_channel_id) const {
+        return (receiver_channel_data_forwarded_bitfield_by_vc & (1u << receiver_channel_id)) != 0;
+    }
+
+    bool operator==(const FabricDatapathUsageL1Results& other) const {
+        return sender_channel_min_packet_size_seen_bytes_by_vc == other.sender_channel_min_packet_size_seen_bytes_by_vc &&
+               sender_channel_max_packet_size_seen_bytes_by_vc == other.sender_channel_max_packet_size_seen_bytes_by_vc &&
+               sender_channel_used_bitfield_by_vc == other.sender_channel_used_bitfield_by_vc &&
+               sender_channel_forwarded_to_bitfield_by_vc == other.sender_channel_forwarded_to_bitfield_by_vc &&
+               receiver_channel_data_forwarded_bitfield_by_vc == other.receiver_channel_data_forwarded_bitfield_by_vc &&
+               used_noc_send_type_by_vc_bitfield == other.used_noc_send_type_by_vc_bitfield;
+    }
+    bool operator!=(const FabricDatapathUsageL1Results& other) const { return !(*this == other); }
 };
 
 // Specialization for disabled implementation - zero overhead, no storage

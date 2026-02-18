@@ -22,6 +22,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <vector>
 
 #include <tt-metalium/host_api.hpp>
@@ -42,6 +43,9 @@
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <llrt/tt_cluster.hpp>
+
+#include "tt_metal/fabric/channel_trimming_export.hpp"
+#include "tt_metal/fabric/channel_trimming_import.hpp"
 
 #include "fabric_fixture.hpp"
 
@@ -105,6 +109,39 @@ std::vector<EthCoreCaptureResult> read_capture_from_all_eth_cores(
     }
 
     return results;
+}
+
+// ============================================================================
+// Helper: Run the real exporter, import the YAML back, and verify that
+// every capture read from L1 matches the imported data.
+// ============================================================================
+void verify_capture_roundtrip(const std::vector<EthCoreCaptureResult>& pre_export_captures) {
+    if (pre_export_captures.empty()) {
+        return;
+    }
+
+    // Run the real exporter (writes to {logs_dir}/generated/reports/channel_trimming_capture.yaml)
+    export_channel_trimming_capture();
+
+    // Determine the output path
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    auto yaml_path =
+        std::filesystem::path(rtoptions.get_logs_dir()) / "generated" / "reports" / "channel_trimming_capture.yaml";
+    ASSERT_TRUE(std::filesystem::exists(yaml_path)) << "Export YAML not found: " << yaml_path;
+
+    // Import back
+    auto imported = load_channel_trimming_overrides(yaml_path.string());
+
+    // Compare: for each pre-export capture, the imported entry must match
+    for (const auto& cap : pre_export_captures) {
+        uint64_t key = make_override_key(cap.physical_chip_id, cap.channel_id);
+        ASSERT_TRUE(imported.contains(key))
+            << "Missing imported entry for chip=" << cap.physical_chip_id
+            << " eth_chan=" << static_cast<int>(cap.channel_id);
+        EXPECT_EQ(imported.at(key), cap.capture)
+            << "Roundtrip mismatch for chip=" << cap.physical_chip_id
+            << " eth_chan=" << static_cast<int>(cap.channel_id);
+    }
 }
 
 // ============================================================================
@@ -607,6 +644,11 @@ TEST_F(Fabric1DChannelTrimmingFixture, UnicastSenderAndReceiverChannelUsed) {
     EXPECT_EQ(num_routers_with_receiver_activity, 1);
     EXPECT_TRUE(found_receiver_forwarding) << "Expected at least one eth core on destination to show receiver "
                                               "channel data forwarding activity";
+
+    // Roundtrip: export to YAML → import → compare
+    auto all_captures = src_captures;
+    all_captures.insert(all_captures.end(), dst_captures.begin(), dst_captures.end());
+    verify_capture_roundtrip(all_captures);
 }
 
 // Test 2: 2-hop unicast — verify intermediate router forwarding
@@ -731,6 +773,12 @@ TEST_F(Fabric1DChannelTrimmingFixture, UnicastMultiHopForwarding) {
         }
     }
     EXPECT_TRUE(num_routers_with_dst_receiver_activity == 1) << "Expected to find exactly one router with receiver activity on destination device";
+
+    // Roundtrip: export to YAML → import → compare
+    auto all_captures = src_captures;
+    all_captures.insert(all_captures.end(), intermediate_captures.begin(), intermediate_captures.end());
+    all_captures.insert(all_captures.end(), dst_captures.begin(), dst_captures.end());
+    verify_capture_roundtrip(all_captures);
 }
 
 // Test 3: 1-hop unicast — verify min/max packet size tracking
@@ -818,6 +866,11 @@ TEST_F(Fabric1DChannelTrimmingFixture, UnicastPacketSizeTracking) {
     }
     EXPECT_TRUE(found_dst_receiver)
         << "Destination router should show receiver channel forwarding activity";
+
+    // Roundtrip: export to YAML → import → compare
+    auto all_captures = src_captures;
+    all_captures.insert(all_captures.end(), dst_captures.begin(), dst_captures.end());
+    verify_capture_roundtrip(all_captures);
 }
 
 // ============================================================================
@@ -902,6 +955,11 @@ TEST_F(Fabric2DChannelTrimmingFixture, DirectionalChannelLiveness) {
                 static_cast<int>(direction),
                 src_node.chip_id,
                 dst_node.chip_id);
+
+            // Roundtrip: export to YAML → import → compare
+            auto all_captures = src_captures;
+            all_captures.insert(all_captures.end(), dst_captures.begin(), dst_captures.end());
+            verify_capture_roundtrip(all_captures);
         }
     }
 
@@ -1051,6 +1109,11 @@ TEST_F(Fabric2DChannelTrimmingFixture, DirectionalChannelForwardedTo) {
     EXPECT_TRUE(found_forwarded_to || found_receiver_forwarding)
         << "Expected forwarding relationship to be recorded either as sender_channel_forwarded_to on source "
            "or receiver_channel_data_forwarded on destination";
+
+    // Roundtrip: export to YAML → import → compare
+    auto all_captures = src_captures;
+    all_captures.insert(all_captures.end(), dst_captures.begin(), dst_captures.end());
+    verify_capture_roundtrip(all_captures);
 }
 
 }  // namespace tt::tt_fabric::fabric_router_tests

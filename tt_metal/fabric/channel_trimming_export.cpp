@@ -96,6 +96,20 @@ void emit_sender_channels(
     emitter << YAML::EndSeq;
 }
 
+void emit_sender_forwarded_to_bitfields(
+    YAML::Emitter& emitter,
+    const CaptureResults& capture) {
+    emitter << YAML::Key << "sender_channel_forwarded_to_by_vc" << YAML::Value << YAML::BeginSeq;
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; vc++) {
+        emitter << YAML::BeginMap;
+        emitter << YAML::Key << "vc" << YAML::Value << vc;
+        emitter << YAML::Key << "bitfield" << YAML::Value
+                << fmt::format("0x{:04X}", capture.sender_channel_forwarded_to_bitfield_by_vc[vc]);
+        emitter << YAML::EndMap;
+    }
+    emitter << YAML::EndSeq;
+}
+
 void emit_receiver_channels(
     YAML::Emitter& emitter,
     const CaptureResults& capture) {
@@ -125,6 +139,14 @@ void emit_noc_send_types(
         emitter << YAML::EndMap;
     }
     emitter << YAML::EndSeq;
+}
+
+void emit_capture_channel_yaml(YAML::Emitter& emitter, const CaptureResults& capture, const char* direction) {
+    emitter << YAML::Key << "direction" << YAML::Value << direction;
+    emit_sender_channels(emitter, capture);
+    emit_sender_forwarded_to_bitfields(emitter, capture);
+    emit_receiver_channels(emitter, capture);
+    emit_noc_send_types(emitter, capture);
 }
 
 }  // namespace
@@ -175,21 +197,25 @@ void export_channel_trimming_capture() {
 
         const auto& chan_map = cluster.get_soc_desc(chip_id).logical_eth_core_to_chan_map;
 
+        // Collect cores that have a valid channel mapping before emitting
+        std::vector<std::pair<CoreCoord, chan_id_t>> mapped_cores;
+        for (const auto& logical_core : logical_cores) {
+            auto chan_it = chan_map.find(logical_core);
+            if (chan_it != chan_map.end()) {
+                mapped_cores.emplace_back(logical_core, static_cast<chan_id_t>(chan_it->second));
+            }
+        }
+        if (mapped_cores.empty()) {
+            continue;
+        }
+
         cluster.l1_barrier(chip_id);
 
         emitter << YAML::Key << fmt::format("chip_{}", chip_id) << YAML::Value << YAML::BeginMap;
 
-        for (const auto& logical_core : logical_cores) {
-            auto chan_it = chan_map.find(logical_core);
-            if (chan_it == chan_map.end()) {
-                continue;
-            }
-            chan_id_t channel_id = static_cast<chan_id_t>(chan_it->second);
-
-            // Get direction for this channel
+        for (const auto& [logical_core, channel_id] : mapped_cores) {
             eth_chan_directions direction = control_plane.get_eth_chan_direction(fabric_node_id, channel_id);
 
-            // Read capture data from L1
             const auto& soc_desc = umd_cluster.get_soc_descriptor(chip_id);
             tt::umd::CoreCoord eth_core = soc_desc.get_eth_core_for_channel(channel_id, tt::CoordSystem::LOGICAL);
 
@@ -200,12 +226,7 @@ void export_channel_trimming_capture() {
             std::memcpy(&capture, buffer.data(), std::min(capture_size, sizeof(CaptureResults)));
 
             emitter << YAML::Key << fmt::format("eth_channel_{}", channel_id) << YAML::Value << YAML::BeginMap;
-            emitter << YAML::Key << "direction" << YAML::Value << direction_to_string(direction);
-
-            emit_sender_channels(emitter, capture);
-            emit_receiver_channels(emitter, capture);
-            emit_noc_send_types(emitter, capture);
-
+            emit_capture_channel_yaml(emitter, capture, direction_to_string(direction));
             emitter << YAML::EndMap;
         }
 

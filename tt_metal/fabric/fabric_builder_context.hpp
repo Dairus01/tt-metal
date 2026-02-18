@@ -9,6 +9,7 @@
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
 #include "erisc_datamover_builder.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
+#include "tt_metal/fabric/channel_trimming_import.hpp"
 #include <vector>
 #include <memory>
 #include <array>
@@ -162,6 +163,11 @@ public:
         return router_config_->get_diagnostic_buffer_map();
     }
 
+    // ============ Channel Trimming Overrides ============
+    const std::optional<ChannelTrimmingOverrideMap>& get_channel_trimming_overrides() const {
+        return channel_trimming_overrides_;
+    }
+
     // ============ Intermesh VC Configuration ============
     const IntermeshVCConfig& get_intermesh_vc_config() const { return intermesh_vc_config_; }
     bool requires_intermesh_vc() const { return intermesh_vc_config_.requires_vc1; }
@@ -175,6 +181,9 @@ private:
     friend class FabricContext;
 
     const FabricContext& fabric_context_;
+
+    // Channel trimming overrides loaded from profile YAML (if specified)
+    std::optional<ChannelTrimmingOverrideMap> channel_trimming_overrides_;
 
     IntermeshVCConfig intermesh_vc_config_;
 
