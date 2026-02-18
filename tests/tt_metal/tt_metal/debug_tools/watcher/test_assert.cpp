@@ -57,7 +57,7 @@ static void RunTest(
     KernelHandle assert_kernel;
     auto procesor_idx =
         hal.get_processor_index(processor.core_type, processor.processor_class, processor.processor_type);
-    std::string risc = hal.get_processor_class_name(processor.core_type, procesor_idx, false).c_str();
+    std::string risc = hal.get_processor_class_name(processor.core_type, procesor_idx, false);
     switch (processor.core_type) {
         case HalProgrammableCoreType::TENSIX:
             logical_core = {0, 0};
