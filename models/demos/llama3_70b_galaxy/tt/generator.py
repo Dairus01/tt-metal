@@ -100,6 +100,12 @@ class Generator(WarmupForwardMixin):
         # Avoids an infinite loop
         self.prefill_traces_warmup = True
 
+        # Check if model supports on-device sampling and non-greedy decoding (same as tt_transformers)
+        sampling_on_device_enabled = (
+            getattr(self.model, "_supports_on_device_sampling", False)
+            and getattr(self.model, "sampling", None) is not None
+        )
+
         self.model.switch_mode("prefill")
         logger.info("Warming up prefill traces for all supported sequence lengths")
         supported_seqlens = (
@@ -127,6 +133,13 @@ class Generator(WarmupForwardMixin):
                 warmup_tokens = torch.zeros(batch, supported_length, dtype=torch.long)
                 warmup_prompt_lens = torch.tensor([supported_length] * batch, dtype=torch.long)
                 warmup_empty_slots = list(range(batch))
+
+                sampling_params = self._create_sampling_params(
+                    can_sample_on_device=sampling_on_device_enabled,
+                    non_greedy_decoding_on_device=sampling_on_device_enabled,
+                    batch_size=batch,
+                )
+
                 self.prefill_forward_text(
                     warmup_tokens,
                     warmup_page_table,
