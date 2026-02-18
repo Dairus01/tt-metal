@@ -245,6 +245,7 @@ def test_stable_diffusion_vae_trace(device, is_ci_env, is_ci_v2_env, model_locat
     ), f"Inference time with trace is {inference_time}s, while expected time is {expected_inference_time}s"
 
 
+@pytest.mark.timeout(500)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": SD_L1_SMALL_SIZE, "trace_region_size": SD_TRACE_REGION_SIZE}], indirect=True
