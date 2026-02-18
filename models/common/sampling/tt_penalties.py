@@ -38,8 +38,9 @@ def apply_penalties(logits: ttnn.Tensor, context: Optional[PenaltyContext]) -> t
     presence_term = ttnn.multiply(
         ttnn.typecast(context.output_mask, ttnn.bfloat16, **op_kwargs), context.presence_penalties, **op_kwargs
     )
-    logits = ttnn.subtract(logits, presence_term, output_tensor=logits, **op_kwargs)
-    presence_term.deallocate()
+    presence_term_bf16 = ttnn.typecast(presence_term, ttnn.bfloat16, **op_kwargs)
+    logits = ttnn.subtract(logits, presence_term_bf16, output_tensor=logits, **op_kwargs)
+    presence_term_bf16.deallocate()
 
     # frequency
     output_counts_bf16 = ttnn.typecast(context.output_counts, ttnn.bfloat16, **op_kwargs)
@@ -139,14 +140,7 @@ class TTPenalties(LightweightModule):
 
     def _alloc_int_buffer(self, shard_dims, host=None, layout=ttnn.TILE_LAYOUT):
         if host is None:
-            host = torch.zeros(
-                (
-                    self.max_batch_size,
-                    self.num_devices * (((self.vocab_size + self.num_devices - 1) // self.num_devices)),
-                ),
-                dtype=torch.int32,
-            )
-            # host = torch.zeros((self.max_batch_size, self.vocab_size), dtype=torch.int32)
+            host = torch.zeros((self.max_batch_size, self.vocab_size), dtype=torch.int32)
         return ttnn.from_torch(
             host,
             dtype=ttnn.int32,
@@ -218,15 +212,11 @@ class TTPenalties(LightweightModule):
         self.token_bin_counts_and_mask(new_tokens=prompt_tokens_tt, src=src_tt, mask=self.prompt_mask)
 
     def reset_output_tokens(self, tokens=None):
-        # ALWAYS reset output buffers to zero first (this is the core accuracy fix from issue #35731)
-        # This ensures penalty statistics are cleared between prefill and decode phases
         self.output_mask = ttnn.mul(self.output_mask, 0, output_tensor=self.output_mask, **self._op_kwargs)
         self.output_counts = ttnn.mul(self.output_counts, 0, output_tensor=self.output_counts, **self._op_kwargs)
         self.output_counts_gathered = ttnn.mul(
             self.output_counts_gathered, 0, output_tensor=self.output_counts_gathered, **self._op_kwargs
         )
-
-        # THEN optionally repopulate if tokens are provided
         if tokens is not None:
             # Mask out padding positions (-1) instead of inventing a fake token id by expanding vocab_size.
             tokens_2d = tokens.reshape(-1, tokens.shape[-1])
@@ -253,8 +243,6 @@ class TTPenalties(LightweightModule):
                 counts_sliced=self.output_counts,
                 mask=self.output_mask,
             )
-            tokens_tt.deallocate()
-            src_tt.deallocate()
 
     def update_output_tokens(self, new_tokens):
         # reshape decode token
