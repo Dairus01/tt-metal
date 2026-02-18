@@ -463,7 +463,7 @@ class Generator:
                     user_logits = logits[slot : slot + 1, :, :, :]
                     # Process the logits
                     _logits = self.model[model_id].process_logits_after_prefill_trace(user_logits, last_token_idx[slot])
-                    output_logits[slot] = self.model[model_id].process_output_prefill(
+                    output_tensor[slot] = self.model[model_id].process_output_prefill(
                         _logits.cpu(), last_token_idx=(last_token_idx[slot] % 32)
                     )
             else:
