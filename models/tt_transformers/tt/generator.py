@@ -591,7 +591,10 @@ class Generator:
                     }
                 )
             else:
-                logits = ttnn.untilize(logits, use_multicore=True)
+                # Only untilize if process_logits_after_prefill_trace was NOT called
+                # (process_logits_after_prefill_trace already converts to ROW_MAJOR via to_layout)
+                if not enable_trace_current_prompt:
+                    logits = ttnn.untilize(logits, use_multicore=True)
                 prefill_results.append(
                     {
                         "idx": idx,
