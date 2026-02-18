@@ -204,9 +204,43 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_61f_(sfpi::vFloat base, sfpi::vFloat
     v_if(z_f32 < low_threshold) { z_f32 = low_threshold; }
     v_endif;
 
-    // 2^z_f32 = exp(z_f32 * ln(2)); use Cody-Waite + Taylor exp for <1 ULP float32 accuracy
+    // 2^z_f32 = exp(z_f32 * ln(2)); Cody-Waite + Taylor (code continued here with unique names, no call)
     constexpr float LN2 = 0.693147180559945309f;
-    sfpi::vFloat y = _sfpu_exp_f32_accurate_(z_f32 * LN2);
+    constexpr float EW_OVERFLOW = 128.0f;
+    constexpr float EW_UNDERFLOW = -127.0f;
+    sfpi::vFloat val_ew = z_f32 * LN2;
+    sfpi::vFloat z_ew = z_f32;
+    sfpi::vInt ew_exp_bits = sfpi::exexp(z_ew);
+    sfpi::vFloat y = sfpi::vConst0;
+
+    v_if(z_ew >= EW_OVERFLOW) { y = std::numeric_limits<float>::infinity(); }
+    v_elseif(z_ew <= EW_UNDERFLOW) { y = sfpi::vConst0; }
+    v_elseif(ew_exp_bits == 255) { y = std::numeric_limits<float>::quiet_NaN(); }
+    v_else {
+        sfpi::vInt k_ew;
+        sfpi::vFloat k_ew_f = _sfpu_round_nearest_int32_(z_ew, k_ew);
+
+        constexpr float EW_LN2_HI = -0.6931152343750000f;
+        constexpr float EW_LN2_LO = -3.19461832987e-05f;
+        sfpi::vFloat r_hi_ew = k_ew_f * EW_LN2_HI + val_ew;
+        sfpi::vFloat r_ew = k_ew_f * EW_LN2_LO + r_hi_ew;
+
+        sfpi::vFloat p_ew = PolynomialEvaluator::eval(
+            r_ew,
+            sfpi::vConst1,
+            sfpi::vConst1,
+            0.5f,
+            1.0f / 6.0f,
+            1.0f / 24.0f,
+            1.0f / 120.0f,
+            1.0f / 720.0f,
+            1.0f / 5040.0f);
+
+        sfpi::vInt p_ew_exp = sfpi::exexp_nodebias(p_ew);
+        sfpi::vInt new_exp_ew = p_ew_exp + k_ew;
+        y = sfpi::setexp(p_ew, new_exp_ew);
+    }
+    v_endif;
 
     // Division by 0 when base is 0 and pow is negative => set to NaN (only for negative exponents)
     v_if((abs_base == 0.f) && pow < 0.f) {
