@@ -384,7 +384,6 @@ void kernel_main() {
     // Writer args (empty - no-op)
     deepseek_b1_ops::Rope::WriterArgs krope_args{};
 
-    DPRINT << "kv_cache_buffer_base_addr: " << HEX() << get_common_arg_val<uint32_t>(15) << ENDL();
     deepseek_b1_ops::KVCacheUpdate::WriterArgs kv_cache_update_args{
         .kv_cache_buffer_base_addr = get_common_arg_val<uint32_t>(15),
         .position_id = get_common_arg_val<uint32_t>(16),
@@ -573,12 +572,9 @@ void kernel_main() {
     };
 
     deepseek_b1_ops::KVCacheUpdate::ComputeArgs kv_cache_update_args{
-        .kv_cache_num_tiles = get_common_arg_val<uint32_t>(4),
-        .kv_cache_input_cb = get_common_arg_val<uint32_t>(5),
-        .kv_cache_output_cb = get_common_arg_val<uint32_t>(6),
-        .kv_cache_intermed_cb = get_common_arg_val<uint32_t>(7),
-        .kv_rmsnorm_output_cb = get_common_arg_val<uint32_t>(8),
-        .krope_output_cb = get_common_arg_val<uint32_t>(9),
+        .kv_cache_input_cb = get_common_arg_val<uint32_t>(4),
+        .kv_cache_output_cb = get_common_arg_val<uint32_t>(5),
+        .kv_cache_intermed_cb = get_common_arg_val<uint32_t>(6),
     };
 
     // Full init, CBs don't matter

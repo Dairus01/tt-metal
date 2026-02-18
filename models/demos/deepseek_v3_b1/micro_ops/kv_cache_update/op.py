@@ -132,7 +132,6 @@ class KVCacheUpdate:
 
         ncrisc_common_runtime_args = [full_kv_cache_tensor.buffer_address()]
         brisc_common_runtime_args = [full_kv_cache_tensor.buffer_address(), position_id]
-        trisc_common_runtime_args = [KV_CACHE_NUM_TILES]
 
         kernel_desc = UnifiedKernelDescriptor(
             kernel_source="models/demos/deepseek_v3_b1/micro_ops/kv_cache_update/kernels/kv_cache_update_kernel.cpp",
@@ -144,7 +143,6 @@ class KVCacheUpdate:
             trisc_named_compile_time_args=trisc_named,
             ncrisc_common_runtime_args=ncrisc_common_runtime_args,
             brisc_common_runtime_args=brisc_common_runtime_args,
-            trisc_common_runtime_args=trisc_common_runtime_args,
             unified_compile_time_core_descriptors=[
                 UnifiedCompileTimeCoreDescriptor(
                     named_compile_time_arg="is_nope_core",

@@ -55,12 +55,9 @@ struct KVCacheUpdate {
         uint32_t krope_output_cb;
     };
     struct ComputeArgs {
-        uint32_t kv_cache_num_tiles;
         uint32_t kv_cache_input_cb;
         uint32_t kv_cache_output_cb;
         uint32_t kv_cache_intermed_cb;
-        uint32_t kv_rmsnorm_output_cb;
-        uint32_t krope_output_cb;
     };
 
     using RTArgs = unified_kernels::SelectByRISCV<ReaderArgs, WriterArgs, ComputeArgs>;
@@ -77,208 +74,83 @@ struct KVCacheUpdate {
         void impl([[maybe_unused]] const RTArgs& args) {
 #if defined(COMPILE_FOR_BRISC)
             if constexpr (IsRopeCore || IsNopeCore) {
-                uint32_t krope_output_cb = args.krope_output_cb;
                 uint32_t kv_cache_intermed_cb = args.kv_cache_intermed_cb;
                 uint32_t kv_cache_input_cb = args.kv_cache_input_cb;
                 uint32_t kv_cache_output_cb = args.kv_cache_output_cb;
+                uint32_t new_cache_cb = IsRopeCore ? args.krope_output_cb : args.kv_rmsnorm_output_cb;
                 constexpr uint32_t PAGE_SIZE = 1088;
                 constexpr uint32_t PAGES_PER_BLOCK = 18;
                 constexpr uint32_t CACHES_PER_BLOCK = 32;
-                constexpr uint32_t nope_num_pages = 16;
+                constexpr uint32_t nope_num_pages = 16;  // Offset in 1x576 for rope component
+                constexpr uint32_t kv_cache_num_tiles = IsRopeCore ? 1 : 16;
 
                 constexpr auto k_args = TensorAccessorArgs<0>();
-                DPRINT << "kv_cache_buffer_base_addr: " << HEX() << args.kv_cache_buffer_base_addr << ENDL();
                 auto kv_tensor_accessor = TensorAccessor(k_args, args.kv_cache_buffer_base_addr, PAGE_SIZE);
 
                 // This op needs to update 18 pages starting from kv_cache_page_id_start
                 // If args.position_id % CACHES_PER_BLOCK != 0, there is an offset into the rows
-                DPRINT << "args.position_id: " << DEC() << args.position_id << ENDL();
                 uint32_t kv_cache_page_id_start = args.position_id / CACHES_PER_BLOCK * PAGES_PER_BLOCK;
                 uint32_t offset_in_page = args.position_id % CACHES_PER_BLOCK;
-                if constexpr (IsRopeCore) {
-                    constexpr uint32_t rope_num_bytes_per_core = 64;  // 1x32 float 16
-                    constexpr uint32_t bytes_per_datum = 2;
-                    constexpr uint32_t kv_cache_num_tiles = 1;
+                uint32_t num_bytes_per_core = IsRopeCore ? 64 : 1024;
 
+                if (IsRopeCore) {
                     uint32_t grid_offset_pages = 1 * (get_absolute_logical_y() - 8);
-                    uint32_t rope_page_id = kv_cache_page_id_start + grid_offset_pages + nope_num_pages;
-                    DPRINT << "rope_page_id: " << HEX() << rope_page_id << ENDL();
-                    // 1. Read in data from DRAM to kv_cache_input_cb
-                    cb_reserve_back(kv_cache_input_cb, kv_cache_num_tiles);
-                    uint32_t readback_addr = get_write_ptr(kv_cache_input_cb);
-                    for (uint32_t i = 0; i < kv_cache_num_tiles; i++) {
-                        uint32_t cb_addr = get_write_ptr(kv_cache_input_cb);
-                        noc_async_read_page(rope_page_id, kv_tensor_accessor, cb_addr);
-                    }
+                    kv_cache_page_id_start += grid_offset_pages;
+                    kv_cache_page_id_start += nope_num_pages;
+                }
+
+                cb_reserve_back(kv_cache_input_cb, kv_cache_num_tiles);
+                uint32_t cb_addr = get_write_ptr(kv_cache_input_cb);
+                for (uint32_t i = 0; i < kv_cache_num_tiles; i++) {
+                    noc_async_read_page(kv_cache_page_id_start + i, kv_tensor_accessor, cb_addr);
+                    cb_addr += kv_tensor_accessor.page_size;
+                }
                     noc_async_read_barrier();
-                    for (uint8_t i = 0; i < 2; i++) {
-                        DPRINT << "read in rope cache: "
-                               << TSLICE(
-                                      kv_cache_input_cb,
-                                      0,
-                                      SliceRange{.h0 = i, .h1 = uint8_t(i + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
-                                      TSLICE_RD_PTR,
-                                      TSLICE_INPUT_CB)
-                               << ENDL();
-                    }
+
                     cb_push_back(kv_cache_input_cb, kv_cache_num_tiles);
 
                     // wait for unpacker to untilize
                     cb_wait_front(kv_cache_intermed_cb, kv_cache_num_tiles);
 
                     // 2. Wait for new cache data and update into kv_cache_intermed_cb
-                    cb_wait_front(krope_output_cb, 1);
-                    DPRINT << "got from cb " << DEC() << krope_output_cb << ": "
-                           << TSLICE(krope_output_cb, 0, SliceRange::h0_w0_32(), TSLICE_RD_PTR, TSLICE_INPUT_CB)
-                           << ENDL();
-                    // valid new rope cache from krope_output_cb
-                    // calculate offset in tile
-                    uint32_t write_addr = get_read_ptr(kv_cache_intermed_cb) + offset_in_page * rope_num_bytes_per_core;
-                    uint32_t new_rope_cache_addr = get_read_ptr(krope_output_cb);
-                    // Local copy: 64 bytes (1..32 bfloat16) from new_rope_cache to intermed.
-                    // Untilized tile layout uses a stride: first 32 bytes at write_addr, next 32 at write_addr+64.
+                    cb_wait_front(new_cache_cb, 1);
+
+                    uint32_t write_addr = get_read_ptr(kv_cache_intermed_cb) + offset_in_page * num_bytes_per_core;
+                    uint32_t new_cache_addr = get_read_ptr(new_cache_cb);
+                    // Local copy data from new cache to intermed, 1x512 for nope, 1x64 for rope (1x32 per core)
                     {
-                        constexpr uint32_t words_per_core = (rope_num_bytes_per_core >> 2);  // 8 uint32_t per 32 bytes
+                        uint32_t words_per_face = (num_bytes_per_core >> 2);
                         volatile tt_l1_ptr uint32_t* src =
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(new_rope_cache_addr);
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(new_cache_addr);
                         volatile tt_l1_ptr uint32_t* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
-                        for (uint32_t i = 0; i < words_per_core; ++i) {
+                        for (uint32_t i = 0; i < words_per_face; ++i) {
                             dst[i] = src[i];
                         }
                     }
-                    cb_pop_front(krope_output_cb, 1);
+                    cb_pop_front(new_cache_cb, 1);
                     cb_push_back(kv_cache_intermed_cb, 1);
 
                     // 3. Wait for TRISC to finish tilize into kv_cache_output_cb and write out to DRAM
                     cb_wait_front(kv_cache_output_cb, kv_cache_num_tiles);
-                    for (uint8_t i = 0; i < 2; i++) {
-                        DPRINT << "written to kv_cache_output_cb: "
-                               << TSLICE(
-                                      kv_cache_output_cb,
-                                      0,
-                                      SliceRange{.h0 = i, .h1 = uint8_t(i + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
-                                      TSLICE_RD_PTR,
-                                      TSLICE_INPUT_CB)
-                               << ENDL();
-                    }
-                    noc_async_write_page(rope_page_id, kv_tensor_accessor, get_read_ptr(kv_cache_output_cb));
-                    noc_async_write_barrier();
-                    cb_pop_front(kv_cache_output_cb, kv_cache_num_tiles);
-                }
-                if constexpr (IsNopeCore) {
-                    uint32_t kv_rmsnorm_output_cb = args.kv_rmsnorm_output_cb;
-                    constexpr uint32_t kv_cache_num_tiles = 16;
-                    constexpr uint32_t nope_num_bytes_per_core = 1024;  // 16x32 float 16
-                    uint32_t kv_cache_input_cb = args.kv_cache_input_cb;
-                    uint32_t kv_cache_intermed_cb = args.kv_cache_intermed_cb;
-                    uint32_t kv_cache_output_cb = args.kv_cache_output_cb;
-                    cb_reserve_back(kv_cache_input_cb, kv_cache_num_tiles);
-                    uint32_t readback_addr = get_write_ptr(kv_cache_input_cb);
-                    uint32_t cb_addr = get_write_ptr(kv_cache_input_cb);
-                    for (uint32_t i = 0; i < kv_cache_num_tiles; i++) {
-                        noc_async_read_page(kv_cache_page_id_start + i, kv_tensor_accessor, cb_addr);
-                        cb_addr += kv_tensor_accessor.page_size;
-                    }
-                    noc_async_read_barrier();
-
-                    cb_push_back(kv_cache_input_cb, kv_cache_num_tiles);
-
-                    // wait for unpacker to untilize
-                    cb_wait_front(kv_cache_intermed_cb, kv_cache_num_tiles);
-
-                    // 2. Wait for new cache data and update into kv_cache_intermed_cb
-                    cb_wait_front(kv_rmsnorm_output_cb, 1);
-
-                    uint32_t write_addr = get_read_ptr(kv_cache_intermed_cb) + offset_in_page * nope_num_bytes_per_core;
-                    uint32_t new_nope_cache_addr = get_read_ptr(kv_rmsnorm_output_cb);
-                    uint32_t bytes_per_face = 512;
-                    // Local copy: 1024 bytes (1..512 bfloat16) from new_nope_cache to intermed.
-                    // Untilized tile layout uses a stride: first 32 bytes at write_addr, next 32 at write_addr+64.
-                    {
-                        uint32_t words_per_face = (bytes_per_face >> 2);  // 8 uint32_t per 32 bytes
-                        volatile tt_l1_ptr uint32_t* src =
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(new_nope_cache_addr);
-                        volatile tt_l1_ptr uint32_t* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
-                        for (uint32_t rows_per_cache = 0; rows_per_cache < 16; rows_per_cache++) {
-                            for (uint32_t i = 0; i < 8; i++) {
-                                dst[i] = src[i];
-                                dst[i + 8] = src[i + 8];
-                            }
-                            dst += 16;
-                            src += 16;
-                        }
-                    }
-                    cb_pop_front(kv_rmsnorm_output_cb, 1);
-                    cb_push_back(kv_cache_intermed_cb, 1);
-
-                    // 3. Wait for TRISC to finish tilize into kv_cache_output_cb and write out to DRAM
-                    cb_wait_front(kv_cache_output_cb, kv_cache_num_tiles);
-                    for (uint32_t j = 0; j < 2; j++) {
-                        for (uint8_t i = 0; i < 32; i++) {
-                            DPRINT << "writing out cache: "
-                                   << TSLICE(
-                                          kv_cache_output_cb,
-                                          j,
-                                          SliceRange{
-                                              .h0 = i, .h1 = uint8_t(i + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
-                                          TSLICE_RD_PTR,
-                                          TSLICE_INPUT_CB)
-                                   << ENDL();
-                        }
-                    }
 
                     cb_addr = get_read_ptr(kv_cache_output_cb);
-                    DPRINT << " WRITING OUT " << HEX() << kv_tensor_accessor.page_size << ENDL();
                     for (uint32_t i = 0; i < kv_cache_num_tiles; i++) {
                         noc_async_write_page(kv_cache_page_id_start + i, kv_tensor_accessor, cb_addr);
                         cb_addr += kv_tensor_accessor.page_size;
                     }
                     noc_async_write_barrier();
                     cb_pop_front(kv_cache_output_cb, kv_cache_num_tiles);
-                }
             }
 #elif defined(COMPILE_FOR_TRISC)
-            if constexpr (IsRopeCore) {
-                constexpr uint32_t kv_cache_num_tiles = 1;
-                uint32_t krope_output_cb = args.krope_output_cb;
+            if constexpr (IsNopeCore || IsRopeCore) {
                 uint32_t kv_cache_intermed_cb = args.kv_cache_intermed_cb;
                 uint32_t kv_cache_input_cb = args.kv_cache_input_cb;
                 uint32_t kv_cache_output_cb = args.kv_cache_output_cb;
-                // One full 32x32 bfloat8 tile: block_ct_dim=1, full_ct_dim=1
-                constexpr uint32_t full_ct_dim = 1;
-                constexpr uint32_t block_ct_dim = 1;
-                cb_wait_front(kv_cache_input_cb, kv_cache_num_tiles);
-                cb_reserve_back(
-                    kv_cache_intermed_cb, kv_cache_num_tiles + 1);  // one extra for ncrisc to fill in new data
+                constexpr uint32_t kv_cache_num_tiles = IsRopeCore ? 1 : 16;
+                constexpr uint32_t full_ct_dim = IsRopeCore ? 1 : 16;
+                constexpr uint32_t block_ct_dim = IsRopeCore ? 1 : 8;
 
-                reconfig_data_format<false, true>(kv_cache_input_cb, kv_cache_input_cb);
-                pack_reconfig_data_format<true>(kv_cache_intermed_cb);
-                pack_untilize_init<block_ct_dim, full_ct_dim>(kv_cache_input_cb, kv_cache_intermed_cb);
-                pack_untilize_block<block_ct_dim, full_ct_dim>(kv_cache_input_cb, 1, kv_cache_intermed_cb, 0);
-                pack_untilize_uninit(kv_cache_intermed_cb);
-                cb_pop_front(kv_cache_input_cb, kv_cache_num_tiles);
-                cb_push_back(kv_cache_intermed_cb, kv_cache_num_tiles);
-
-                cb_wait_front(kv_cache_intermed_cb, kv_cache_num_tiles + 1);
-                cb_reserve_back(kv_cache_output_cb, kv_cache_num_tiles);
-
-                reconfig_data_format<false, true>(kv_cache_intermed_cb, krope_output_cb);
-                pack_reconfig_data_format<true>(kv_cache_output_cb);
-                tilize_init(kv_cache_intermed_cb, kv_cache_num_tiles, kv_cache_output_cb);
-                tilize_block(kv_cache_intermed_cb, kv_cache_num_tiles, kv_cache_output_cb);
-                tilize_uninit(kv_cache_intermed_cb, kv_cache_output_cb);
-                cb_push_back(kv_cache_output_cb, kv_cache_num_tiles);
-                cb_pop_front(kv_cache_intermed_cb, kv_cache_num_tiles);
-            }
-            if constexpr (IsNopeCore) {
-                uint32_t kv_rmsnorm_output_cb = args.kv_rmsnorm_output_cb;
-                uint32_t kv_cache_intermed_cb = args.kv_cache_intermed_cb;
-                uint32_t kv_cache_input_cb = args.kv_cache_input_cb;
-                uint32_t kv_cache_output_cb = args.kv_cache_output_cb;
-                uint32_t kv_cache_num_tiles = args.kv_cache_num_tiles;
-                constexpr uint32_t full_ct_dim = 16;
-                constexpr uint32_t block_ct_dim = 8;
-                reconfig_data_format<false, true>(kv_cache_input_cb, kv_cache_input_cb);
+                reconfig_data_format_srca<false, true>(kv_cache_input_cb);
                 pack_reconfig_data_format<true>(kv_cache_intermed_cb);
                 cb_wait_front(kv_cache_input_cb, kv_cache_num_tiles);
                 cb_reserve_back(kv_cache_intermed_cb, kv_cache_num_tiles + 1);
@@ -294,7 +166,7 @@ struct KVCacheUpdate {
                 cb_wait_front(kv_cache_intermed_cb, kv_cache_num_tiles + 1);
                 cb_reserve_back(kv_cache_output_cb, kv_cache_num_tiles);
 
-                reconfig_data_format<false, true>(kv_cache_intermed_cb, kv_rmsnorm_output_cb);
+                reconfig_data_format_srca<false, true>(kv_cache_intermed_cb);
                 pack_reconfig_data_format<true>(kv_cache_output_cb);
                 tilize_init(kv_cache_intermed_cb, kv_cache_num_tiles, kv_cache_output_cb);
                 tilize_block(kv_cache_intermed_cb, kv_cache_num_tiles, kv_cache_output_cb);

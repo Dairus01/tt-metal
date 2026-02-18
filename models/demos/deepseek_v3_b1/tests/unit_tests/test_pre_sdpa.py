@@ -579,7 +579,7 @@ def test_pre_sdpa(
     logger.info(f"Creating KV cache with seq_len={max_seq_len}...")
     kvpe_dim = KNOPE_DIM + KROPE_DIM
     cache_shape = (1, 1, max_seq_len, kvpe_dim)
-    torch_kv_cache = torch.randn(cache_shape, dtype=torch.bfloat16)
+    torch_kv_cache = torch.zeros(cache_shape, dtype=torch.bfloat16)
 
     # ND sharding with ROUND_ROBIN_1D distribution across DRAM banks
     # Each shard = one k_chunk (k_chunk_size x kvpe_dim), distributed round-robin

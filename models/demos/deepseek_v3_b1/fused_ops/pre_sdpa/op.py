@@ -1665,12 +1665,9 @@ class PreSDPA:
                     scalar_packed,  # idx 1
                     scalar2_packed,  # idx 2
                     kv_scalar_packed,  # idx 3
-                    kv_cache_num_tiles,
                     kv_cache_input_cb,
                     kv_cache_output_cb,
                     kv_cache_intermed_cb,
-                    kv_rmsnorm_output_cb,
-                    krope_output_cb,
                 ]
 
                 unified_kernel = UnifiedKernelDescriptor(

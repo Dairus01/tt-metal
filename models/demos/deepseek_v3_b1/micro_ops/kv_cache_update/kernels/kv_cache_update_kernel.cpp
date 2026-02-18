@@ -40,12 +40,9 @@ void kernel_main() {
     };
 #elif defined(COMPILE_FOR_TRISC)
     deepseek_b1_ops::KVCacheUpdate::ComputeArgs args{
-        .kv_cache_num_tiles = get_common_arg_val<uint32_t>(0),
         .kv_cache_input_cb = get_named_compile_time_arg_val("kv_cache_input_cb"),
         .kv_cache_output_cb = get_named_compile_time_arg_val("kv_cache_output_cb"),
         .kv_cache_intermed_cb = get_named_compile_time_arg_val("kv_cache_intermed_cb"),
-        .kv_rmsnorm_output_cb = get_named_compile_time_arg_val("kv_rmsnorm_output_cb"),
-        .krope_output_cb = get_named_compile_time_arg_val("krope_output_cb"),
     };
 
     compute_kernel_hw_startup(0, 0, 0);

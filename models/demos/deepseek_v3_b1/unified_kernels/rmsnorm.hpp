@@ -114,7 +114,6 @@ struct RMSNorm {
                 mul_reduce_scalar_init(args.input_cb, args.input_cb);
                 add_rsqrt_tile_init();
                 cb_wait_front(args.input_cb, num_tiles);
-                UNPACK(DPRINT << "input_cb: " << TSLICE(args.input_cb, 0, SliceRange::h0_w0_32()) << ENDL());
                 tile_regs_acquire();
                 mul_reduce_scalar_tile<PoolType::SUM>(args.input_cb, args.input_cb, num_tiles, args.scalar);
                 mul_reduce_scalar_uninit();
@@ -142,7 +141,6 @@ struct RMSNorm {
                 tile_regs_wait();
 
                 pack_tile_block(0, args.output_cb, num_tiles);
-                DPRINT << "packed output: " << TSLICE(args.output_cb, 0, SliceRange::h0_w0_32()) << ENDL();
                 cb_push_back(args.output_cb, num_tiles);
                 tile_regs_release();
             }
