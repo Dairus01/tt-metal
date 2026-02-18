@@ -169,6 +169,8 @@ class Transformer(LightweightModule):
         if lm_head_input_mem_cfg.is_sharded():
             logits = ttnn.interleaved_to_sharded(logits, lm_head_input_mem_cfg)
         logits = self.lm_head(logits)
+        # Convert to ROW_MAJOR layout for faster CPU transfer (critical for TTFT performance)
+        logits = ttnn.to_layout(logits, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return logits
 
     def process_hidden_states_after_prefill_trace(self, hidden_states, last_token_idx):
