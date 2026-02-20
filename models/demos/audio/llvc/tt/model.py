@@ -270,14 +270,48 @@ class TtCausalTransformerDecoder(torch.nn.Module):
         return ctx
 
     def _causal_unfold_ttnn(self, x):
+        # x: [B, 1, L_total, C]
+        # output: [B*Chunk, 1, WindowSize, C]
+
+        B = x.shape[0]
+        L_total = x.shape[2]
+        C = x.shape[3]
+        window_size = self.ctx_len + 1
+        chunk = L_total - self.ctx_len
+
+        slices = []
+        for i in range(chunk):
+            s = ttnn.slice(
+                x,
+                (0, 0, i, 0),
+                (B, 1, i + window_size, C)
+            )
+            slices.append(s)
+
+        # Concat along batch dim?
+        # ttnn.concat usually concats on existing dim.
+        # slices[i] is [B, 1, Window, C].
+        # We want [B*Chunk, 1, Window, C].
+        # If we concat on dim 0, we get [B*Chunk, 1, Window, C] IF B=1.
+        # If B > 1, we might need interleave logic?
+        # For now assume B=1 as standard inference.
+
+        if B == 1:
+            unfolded = ttnn.concat(slices, dim=0)
+        else:
+            # Not supported easily without proper reshape/permute logic
+            # Fallback to CPU if B > 1 (rare for streaming)
+            return self._causal_unfold_fallback(x)
+
+        return unfolded
+
+    def _causal_unfold_fallback(self, x):
         x_torch = ttnn.to_torch(x)
         B, _, L_total, C = x_torch.shape
         window_size = self.ctx_len + 1
-
         unfolded = x_torch.squeeze(1).unfold(1, window_size, 1)
         unfolded = unfolded.permute(0, 1, 3, 2)
         unfolded = unfolded.reshape(-1, 1, window_size, C)
-
         return ttnn.from_torch(unfolded, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
 
     def forward(self, tgt, mem, ctx_buf):
