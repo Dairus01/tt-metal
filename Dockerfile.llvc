@@ -1,0 +1,491 @@
+# Dockerfile for LLVC model bring-up on Koyeb TT-N300S
+#
+# Builds tt-metal from source and provides a web service for
+# running tests and checking device status on Koyeb N300s instances.
+#
+# KOYEB DEPLOYMENT REQUIREMENTS:
+#   1. Builder: Dockerfile, path: Dockerfile.llvc
+#   2. Instance: N300s
+#   3. Privileged: ENABLED (required for /dev/tenstorrent access)
+#   4. Port: 8000 (HTTP)
+#   5. Health check: HTTP GET /health on port 8000
+
+ARG UBUNTU_VERSION=22.04
+ARG PYTHON_VERSION=3.10
+
+FROM ghcr.io/astral-sh/uv@sha256:9a23023be68b2ed09750ae636228e903a54a05ea56ed03a934d00fe9fbeded4b AS uv-layer
+
+FROM mirror.gcr.io/ubuntu:${UBUNTU_VERSION}
+
+ARG PYTHON_VERSION
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TT_METAL_HOME=/tt-metal
+ENV PYTHONPATH=/tt-metal
+ENV ARCH_NAME=wormhole_b0
+ENV PATH="/usr/local/bin:$PATH"
+
+COPY --from=uv-layer /uv /uvx /usr/local/bin/
+
+# Install Python
+ENV UV_PYTHON_INSTALL_DIR="/usr/local/share/uv"
+RUN umask 000 && uv python install "$PYTHON_VERSION"
+
+# Install system dependencies (including pciutils for lspci, kmod for modprobe)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git wget curl build-essential cmake ninja-build \
+    software-properties-common ca-certificates \
+    libhwloc-dev libboost-all-dev libyaml-cpp-dev \
+    pciutils kmod jq \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /tt-metal
+
+# Copy source
+COPY . /tt-metal/
+
+# Install runtime deps (tt-metal system packages)
+RUN /bin/bash /tt-metal/install_dependencies.sh --docker || true
+
+# Set up venv
+ENV PYTHON_ENV_DIR=/opt/venv
+RUN umask 000 && uv venv --python "$PYTHON_VERSION" --link-mode copy --managed-python --relocatable "$PYTHON_ENV_DIR"
+ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
+ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
+
+# Install Python packages
+RUN umask 000 && \
+    uv pip install --no-cache --index-url https://download.pytorch.org/whl/cpu torch torchvision && \
+    uv pip install --no-cache pytest loguru numpy pyyaml networkx graphviz \
+    multiprocess psutil scipy pandas seaborn click \
+    Pillow typing_extensions && \
+    uv pip install --no-cache -e .
+
+# Build tt-metal
+RUN /bin/bash -c "./build_metal.sh"
+
+# Health check endpoint (Koyeb requires a web service)
+RUN uv pip install --no-cache flask
+
+# Entrypoint script: detects TT device, configures hugepages if possible, starts server
+COPY <<'ENTRYPOINT_EOF' /tt-metal/entrypoint.sh
+#!/bin/bash
+set -e
+
+echo "=== TT-Metal LLVC Container Starting ==="
+echo "ARCH_NAME=$ARCH_NAME"
+echo "TT_METAL_HOME=$TT_METAL_HOME"
+echo "KOYEB_INSTANCE_TYPE=${KOYEB_INSTANCE_TYPE:-not set}"
+echo "KOYEB_PRIVILEGED=${KOYEB_PRIVILEGED:-not set}"
+echo "KOYEB_REGION=${KOYEB_REGION:-not set}"
+
+# Check for TT device — create device node manually if needed
+# In containers, udev rules don't run, so /dev/tenstorrent may not be created
+# even though the kernel module is loaded and PCI device is present.
+if [ -d "/dev/tenstorrent" ] || [ -c "/dev/tenstorrent/0" ]; then
+    echo "TT device found at /dev/tenstorrent"
+    ls -la /dev/tenstorrent/ 2>/dev/null || true
+else
+    echo "WARNING: /dev/tenstorrent not found — attempting manual creation..."
+
+    # Check if PCI device is present
+    TT_PCI=$(lspci -nn 2>/dev/null | grep -i "1e52" || true)
+    # Check if kernel module is loaded
+    TT_MOD=$(lsmod 2>/dev/null | grep -i tenstorrent || true)
+
+    if [ -n "$TT_PCI" ] && [ -n "$TT_MOD" ]; then
+        echo "PCI device found: $TT_PCI"
+        echo "Kernel module loaded: $TT_MOD"
+
+        # Get the major number from /proc/devices
+        TT_MAJOR=$(grep tenstorrent /proc/devices 2>/dev/null | awk '{print $1}')
+        if [ -n "$TT_MAJOR" ]; then
+            echo "Found tenstorrent major number: $TT_MAJOR"
+            mkdir -p /dev/tenstorrent
+            mknod /dev/tenstorrent/0 c "$TT_MAJOR" 0 2>/dev/null || true
+            chmod 666 /dev/tenstorrent/0 2>/dev/null || true
+
+            # Check for second device (N300 has 2 chips but 1 PCI endpoint)
+            if [ -e "/sys/class/tenstorrent" ]; then
+                for dev in /sys/class/tenstorrent/tenstorrent*; do
+                    MINOR=$(cat "$dev/dev" 2>/dev/null | cut -d: -f2)
+                    if [ -n "$MINOR" ] && [ "$MINOR" != "0" ]; then
+                        mknod "/dev/tenstorrent/$MINOR" c "$TT_MAJOR" "$MINOR" 2>/dev/null || true
+                        chmod 666 "/dev/tenstorrent/$MINOR" 2>/dev/null || true
+                    fi
+                done
+            fi
+
+            echo "Device node(s) created:"
+            ls -la /dev/tenstorrent/ 2>/dev/null || true
+        else
+            echo "ERROR: Kernel module loaded but major number not found in /proc/devices"
+            echo "Contents of /proc/devices (char devices):"
+            grep -A5 "^Character" /proc/devices 2>/dev/null | head -20 || true
+        fi
+    else
+        echo "PCI device or kernel module not found:"
+        echo "  PCI: ${TT_PCI:-not found}"
+        echo "  Module: ${TT_MOD:-not loaded}"
+        echo ""
+        echo "Possible causes:"
+        echo "  1. Instance is NOT N300s (check KOYEB_INSTANCE_TYPE)"
+        echo "  2. Privileged mode not enabled (check KOYEB_PRIVILEGED)"
+        echo "  3. Need to redeploy after selecting N300s instance"
+    fi
+fi
+
+# Configure hugepages for TT device init
+# N300 has 2 chips: 1 PCIe (MMIO) + 1 remote (Ethernet between chips).
+# The remote chip requires a hugetlbfs mounted at /dev/hugepages-1G for DMA.
+# Without this mount, the UMD fails with "Broadcasts not available without system memory."
+if [ -w /proc/sys/vm/nr_hugepages ]; then
+    echo "Configuring hugepages..."
+
+    # === 2MB Hugepages (always configure these first) ===
+    echo "Configuring 2MB hugepages (1024 x 2MB = 2GB)..."
+    echo 1024 > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages 2>/dev/null || true
+    ACTUAL_2M=$(cat /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages 2>/dev/null || echo 'unknown')
+    echo "2MB hugepages: ${ACTUAL_2M} allocated"
+
+    # === 1GB Hugepages for N300 inter-chip DMA ===
+    # The UMD checks /proc/mounts for a hugetlbfs at /dev/hugepages-1G.
+    # Try 1GB hugepages first; if kernel doesn't support them, use 2MB as fallback.
+    HP_1G_DIR="/sys/kernel/mm/hugepages/hugepages-1048576kB"
+    mkdir -p /dev/hugepages-1G
+
+    HUGEPAGE_1G_MOUNTED=false
+    if [ -d "$HP_1G_DIR" ]; then
+        echo "1GB hugepage support detected in kernel"
+        CURRENT_1G=$(cat "$HP_1G_DIR/nr_hugepages" 2>/dev/null || echo "0")
+        if [ "$CURRENT_1G" -lt 1 ]; then
+            echo "Allocating 1 x 1GB hugepage..."
+            echo 1 > "$HP_1G_DIR/nr_hugepages" 2>/dev/null || true
+        fi
+        ACTUAL_1G=$(cat "$HP_1G_DIR/nr_hugepages" 2>/dev/null || echo "0")
+        echo "1GB hugepages: ${ACTUAL_1G} allocated"
+
+        if ! mountpoint -q /dev/hugepages-1G 2>/dev/null; then
+            # UMD's find_hugepage_dir() parses /proc/mounts and requires:
+            #   1. Source = "hugetlbfs" (not "none")
+            #   2. mode=777 for access permissions
+            mount -t hugetlbfs -o pagesize=1G,mode=777 hugetlbfs /dev/hugepages-1G 2>/dev/null && HUGEPAGE_1G_MOUNTED=true || true
+        else
+            # If already mounted but with wrong source (e.g. "none"), remount
+            MOUNT_SRC=$(grep hugepages-1G /proc/mounts 2>/dev/null | awk '{print $1}' || true)
+            if [ "$MOUNT_SRC" != "hugetlbfs" ]; then
+                echo "Remounting /dev/hugepages-1G with correct source..."
+                umount /dev/hugepages-1G 2>/dev/null || true
+                mount -t hugetlbfs -o pagesize=1G,mode=777 hugetlbfs /dev/hugepages-1G 2>/dev/null && HUGEPAGE_1G_MOUNTED=true || true
+            else
+                HUGEPAGE_1G_MOUNTED=true
+            fi
+        fi
+    fi
+
+    # Fallback: mount 2MB hugetlbfs at /dev/hugepages-1G if 1GB mount failed.
+    # The UMD's find_hugepage_dir() searches /proc/mounts for the path
+    # /dev/hugepages-1G with a hugetlbfs filesystem. While it prefers 1GB pages,
+    # a 2MB hugetlbfs mount at this path satisfies the check and allows the
+    # N300 remote chip initialization to proceed.
+    if [ "$HUGEPAGE_1G_MOUNTED" = false ]; then
+        echo "1GB hugepages not available, mounting 2MB hugetlbfs at /dev/hugepages-1G as fallback..."
+        if ! mountpoint -q /dev/hugepages-1G 2>/dev/null; then
+            mount -t hugetlbfs -o pagesize=2M,mode=777 hugetlbfs /dev/hugepages-1G 2>/dev/null || {
+                # Last resort: try without specifying page size
+                mount -t hugetlbfs -o mode=777 hugetlbfs /dev/hugepages-1G 2>/dev/null || {
+                    echo "WARNING: Failed to mount hugetlbfs at /dev/hugepages-1G"
+                    echo "N300 remote chip will NOT be available"
+                }
+            }
+        fi
+    fi
+
+    if mountpoint -q /dev/hugepages-1G 2>/dev/null; then
+        echo "hugetlbfs mounted at /dev/hugepages-1G"
+        mount | grep hugepages-1G || true
+    else
+        echo "ERROR: /dev/hugepages-1G is NOT mounted - device tests will fail"
+    fi
+
+    # Show remaining free memory
+    free -h 2>/dev/null || true
+else
+    echo "Cannot configure hugepages (no write access to /proc/sys/vm) - this is expected if not privileged"
+fi
+
+echo "=== Starting Flask health server on port 8000 ==="
+exec python -m flask --app health_server run --host 0.0.0.0 --port 8000
+ENTRYPOINT_EOF
+RUN chmod +x /tt-metal/entrypoint.sh
+
+COPY <<'EOF' /tt-metal/health_server.py
+from flask import Flask
+import subprocess, threading, sys, os, time, json, signal
+
+app = Flask(__name__)
+test_output = {"status": "pending", "log": "", "started_at": None, "finished_at": None}
+
+# Timeout per test phase (seconds)
+TEST_TIMEOUT = 600
+
+def _get_mem_info():
+    """Get current memory usage summary."""
+    try:
+        r = subprocess.run(["free", "-h"], capture_output=True, text=True, timeout=5)
+        return r.stdout.strip()
+    except Exception:
+        return "(free command unavailable)"
+
+def _run_pytest(args, env, label):
+    """Run a single pytest invocation with timeout and error capture."""
+    log = f"\n{'='*50}\n{label}\n{'='*50}\n"
+    log += f"Memory before: \n{_get_mem_info()}\n\n"
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "pytest"] + args,
+            capture_output=True, text=True, cwd="/tt-metal", env=env,
+            timeout=TEST_TIMEOUT,
+        )
+        log += result.stdout + result.stderr
+        if result.returncode < 0:
+            sig = -result.returncode
+            sig_name = signal.Signals(sig).name if sig in signal.Signals._value2member_map_ else str(sig)
+            log += f"\n[KILLED] Process killed by signal {sig_name} ({sig})\n"
+            if sig == 9:
+                log += "[OOM] Signal 9 (SIGKILL) usually indicates Out-Of-Memory kill.\n"
+                log += f"Memory after: \n{_get_mem_info()}\n"
+        passed = result.returncode == 0
+    except subprocess.TimeoutExpired:
+        log += f"\n[TIMEOUT] Test phase exceeded {TEST_TIMEOUT}s timeout.\n"
+        passed = False
+    except Exception as e:
+        log += f"\n[ERROR] Exception running tests: {e}\n"
+        passed = False
+    return log, passed
+
+def run_tests():
+    test_output["status"] = "running"
+    test_output["started_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    test_output["finished_at"] = None
+    test_output["log"] = "Tests starting...\n"
+    env = os.environ.copy()
+    env["ARCH_NAME"] = "wormhole_b0"
+
+    has_device = os.path.exists("/dev/tenstorrent")
+    log_parts = []
+    log_parts.append(f"System memory at start:\n{_get_mem_info()}\n")
+    overall_pass = True
+
+    # Phase 1: CPU tests
+    log, passed = _run_pytest(
+        ["models/demos/audio/llvc/tests/test_llvc.py",
+         "-v", "-s", "-k", "cpu", "--no-header", "-rN"],
+        env, "CPU TESTS"
+    )
+    log_parts.append(log)
+    test_output["log"] = "".join(log_parts)
+    if not passed:
+        overall_pass = False
+
+    # Phase 2: Device tests (if hardware available)
+    if has_device:
+        log, passed = _run_pytest(
+            ["models/demos/audio/llvc/tests/test_llvc.py",
+             "-v", "-s", "-k", "device",
+             "--tt-arch", "wormhole_b0", "--no-header", "-rN"],
+            env, "DEVICE TESTS"
+        )
+        log_parts.append(log)
+        test_output["log"] = "".join(log_parts)
+        if not passed:
+            overall_pass = False
+    else:
+        log_parts.append("\n=== DEVICE TESTS SKIPPED (no /dev/tenstorrent) ===\n")
+
+    # Phase 3: Demo
+    demo_k = [] if has_device else ["-k", "cpu"]
+    log, passed = _run_pytest(
+        ["models/demos/audio/llvc/demo/demo.py", "-v", "-s",
+         "--no-header", "-rN"] + demo_k,
+        env, "DEMO"
+    )
+    log_parts.append(log)
+
+    test_output["log"] = "".join(log_parts)
+    test_output["status"] = "passed" if overall_pass else "failed"
+    test_output["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+
+@app.route("/")
+def index():
+    has_device = os.path.exists("/dev/tenstorrent")
+    device_status = "DETECTED" if has_device else "NOT FOUND"
+    mem_info = _get_mem_info()
+    html = f"""<pre>
+LLVC TTNN Test Runner
+=====================
+Test Status: {test_output['status']}
+TT Device:   {device_status}
+Started:     {test_output['started_at'] or 'N/A'}
+Finished:    {test_output['finished_at'] or 'N/A'}
+Instance:    {os.environ.get('KOYEB_INSTANCE_TYPE', 'unknown')}
+
+Current Memory:
+{mem_info}
+
+Endpoints:
+  /run    - Start test suite
+  /check  - Full environment diagnostics
+  /health - Health check (returns 'ok')
+
+{test_output['log']}
+</pre>"""
+    return html
+
+@app.route("/run")
+def run():
+    if test_output["status"] == "running":
+        return "<pre>Tests already running. Visit / to see progress.</pre>"
+    threading.Thread(target=run_tests, daemon=True).start()
+    return "<pre>Tests started. Visit / to see results (refresh after ~60s).</pre>"
+
+@app.route("/health")
+def health():
+    return "ok"
+
+@app.route("/check")
+def check():
+    """Comprehensive environment and TT device diagnostics."""
+    lines = []
+    lines.append("=" * 60)
+    lines.append("LLVC TTNN Environment Diagnostics")
+    lines.append("=" * 60)
+
+    # System memory
+    lines.append("\n--- System Memory ---")
+    lines.append(_get_mem_info())
+
+    # Koyeb instance info
+    lines.append("\n--- Koyeb Instance Info ---")
+    for var in ["KOYEB_INSTANCE_TYPE", "KOYEB_INSTANCE_MEMORY_MB",
+                "KOYEB_REGION", "KOYEB_DC", "KOYEB_PRIVILEGED",
+                "KOYEB_GPU_COUNT", "KOYEB_INSTANCE_ID",
+                "KOYEB_SERVICE_NAME", "KOYEB_APP_NAME"]:
+        lines.append(f"  {var}={os.environ.get(var, 'NOT SET')}")
+
+    # TT-Metal env
+    lines.append("\n--- TT-Metal Environment ---")
+    for var in ["ARCH_NAME", "TT_METAL_HOME", "PYTHONPATH"]:
+        lines.append(f"  {var}={os.environ.get(var, 'NOT SET')}")
+
+    # Build artifacts
+    lines.append("\n--- Build Artifacts ---")
+    import glob
+    so_files = glob.glob("/tt-metal/build/lib/*.so")
+    lines.append(f"  Shared libraries: {len(so_files)}")
+    for f in sorted(so_files):
+        lines.append(f"    {f}")
+
+    # TTNN import
+    lines.append("\n--- TTNN Import ---")
+    try:
+        import ttnn
+        lines.append(f"  ttnn imported OK")
+        try:
+            lines.append(f"  arch: {ttnn.get_arch_name()}")
+        except Exception as e:
+            lines.append(f"  arch detection failed: {e}")
+    except Exception as e:
+        lines.append(f"  ttnn import FAILED: {e}")
+
+    # PCI devices
+    lines.append("\n--- PCI Devices (Tenstorrent) ---")
+    try:
+        r = subprocess.run(["lspci", "-nn"], capture_output=True, text=True, timeout=5)
+        tt_devices = [l for l in r.stdout.splitlines() if "1e52" in l.lower() or "tenstorrent" in l.lower()]
+        if tt_devices:
+            for d in tt_devices:
+                lines.append(f"  {d}")
+        else:
+            lines.append("  No Tenstorrent PCI devices found (vendor 1e52)")
+            lines.append("  This means the N300s hardware is NOT visible to this container.")
+            lines.append("  Possible fix: Enable 'Privileged' mode in Koyeb Builder settings,")
+            lines.append("  or confirm the Instance is actually N300s (not a different type).")
+    except Exception as e:
+        lines.append(f"  lspci failed: {e}")
+
+    # /dev/tenstorrent
+    lines.append("\n--- /dev/tenstorrent ---")
+    try:
+        if os.path.exists("/dev/tenstorrent"):
+            r = subprocess.run(["ls", "-la", "/dev/tenstorrent/"], capture_output=True, text=True)
+            lines.append(f"  {r.stdout.strip()}")
+        else:
+            lines.append("  /dev/tenstorrent does NOT exist")
+    except Exception as e:
+        lines.append(f"  Error: {e}")
+
+    # All /dev entries (look for anything TT-related)
+    lines.append("\n--- /dev/ entries (filtered) ---")
+    try:
+        devs = os.listdir("/dev")
+        tt_devs = [d for d in devs if any(k in d.lower() for k in ["tt", "tenstorrent", "wormhole"])]
+        if tt_devs:
+            for d in tt_devs:
+                lines.append(f"  /dev/{d}")
+        else:
+            lines.append("  No TT-related entries found in /dev/")
+            # Show all device entries for debugging
+            lines.append("  All /dev/ entries:")
+            for d in sorted(devs)[:50]:
+                lines.append(f"    {d}")
+            if len(devs) > 50:
+                lines.append(f"    ... and {len(devs)-50} more")
+    except Exception as e:
+        lines.append(f"  Error listing /dev: {e}")
+
+    # Hugepages
+    lines.append("\n--- Hugepages ---")
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if "huge" in line.lower():
+                    lines.append(f"  {line.strip()}")
+    except Exception as e:
+        lines.append(f"  Cannot read /proc/meminfo: {e}")
+
+    # Kernel modules
+    lines.append("\n--- Kernel Modules (tenstorrent) ---")
+    try:
+        r = subprocess.run(["lsmod"], capture_output=True, text=True, timeout=5)
+        tt_mods = [l for l in r.stdout.splitlines() if "tenstorrent" in l.lower() or "tt_" in l.lower()]
+        if tt_mods:
+            for m in tt_mods:
+                lines.append(f"  {m}")
+        else:
+            lines.append("  No TT kernel modules loaded")
+            lines.append("  The tt-kmd driver may not be installed on the host.")
+    except Exception as e:
+        lines.append(f"  lsmod failed: {e}")
+
+    # Summary and recommendations
+    lines.append("\n--- Summary & Recommendations ---")
+    has_device = os.path.exists("/dev/tenstorrent")
+    if has_device:
+        lines.append("  STATUS: TT device is available! Device tests should work.")
+    else:
+        lines.append("  STATUS: TT device NOT available. Only CPU tests will run.")
+        lines.append("")
+        lines.append("  To fix this on Koyeb N300s:")
+        lines.append("  1. Confirm Instance type is 'N300s' (check KOYEB_INSTANCE_TYPE above)")
+        lines.append("  2. Enable 'Privileged' mode in Service Settings -> Builder section")
+        lines.append("  3. Click 'Save and deploy' (must redeploy, not just save)")
+        lines.append("  4. If still not working, contact Koyeb support - N300s is in Private Preview")
+        lines.append("     and device passthrough may need to be explicitly enabled for your account.")
+
+    lines.append("\n" + "=" * 60)
+    return "<pre>" + "\n".join(lines) + "</pre>"
+EOF
+
+EXPOSE 8000
+CMD ["/tt-metal/entrypoint.sh"]
