@@ -21,24 +21,11 @@ RUN pip install --no-cache-dir --user \
 COPY --chown=appuser:appuser hparams/hparams.json /app/
 
 # Download Model Layers
-RUN python -c "\
-    import json; \
-    cfg = json.load(open('/app/hparams.json')); \
-    model = cfg['benchmark_model_name']; \
-    from transformers import AutoModelForCausalLM, AutoTokenizer; \
-    print(f'Downloading model: {model}'); \
-    AutoModelForCausalLM.from_pretrained(model, torch_dtype='auto', trust_remote_code=True); \
-    AutoTokenizer.from_pretrained(model, trust_remote_code=True); \
-    print('Model cached')"
+RUN python -c "import json; cfg = json.load(open('/app/hparams.json')); model = cfg['benchmark_model_name']; from transformers import AutoModelForCausalLM, AutoTokenizer; print(f'Downloading model: {model}'); AutoModelForCausalLM.from_pretrained(model, torch_dtype='auto', trust_remote_code=True); AutoTokenizer.from_pretrained(model, trust_remote_code=True); print('Model cached')"
 
 # Cache Dataset
 COPY --chown=appuser:appuser environments/templar/cache_dataset.py /app/
-RUN python -c "\
-    import json, os; \
-    cfg = json.load(open('/app/hparams.json')); \
-    os.environ['DATASET_NAME'] = cfg['benchmark_dataset_name']; \
-    os.environ['NUM_SAMPLES'] = str(cfg['benchmark_data_samples']); \
-    exec(open('/app/cache_dataset.py').read())" || [ -f /home/appuser/.cache/templar/dataset.json ]
+RUN python -c "import json, os; cfg = json.load(open('/app/hparams.json')); os.environ['DATASET_NAME'] = cfg['benchmark_dataset_name']; os.environ['NUM_SAMPLES'] = str(cfg['benchmark_data_samples']); exec(open('/app/cache_dataset.py').read())" || [ -f /home/appuser/.cache/templar/dataset.json ]
 
 COPY --chown=appuser:appuser environments/templar/env.py /app/
 
