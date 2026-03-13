@@ -2,42 +2,38 @@
     "netuid": 3,
     "burn_rate": 0.95,
     "burn_uid": 1,
-
     "evaluation_runs": 1,
-    "eval_steps": 20,
+    "eval_steps": 15,
     "eval_timeout": 3600,
     "min_success_rate": 0.5,
-
     "benchmark_model_name": "Qwen/Qwen2.5-7B",
     "benchmark_dataset_name": "HuggingFaceFW/fineweb",
     "benchmark_dataset_split": "train",
     "benchmark_data_samples": 10000,
     "benchmark_master_seed": 42,
     "benchmark_sequence_length": 1024,
-    "benchmark_batch_size": 16,
-
+    "benchmark_batch_size": 4,
     "set_weights_interval_blocks": 100,
     "reveal_blocks": 20,
     "min_blocks_between_commits": 360,
     "block_time": 12,
-
     "docker": {
-        "num_gpus": 2,
-        "memory_limit": "160g",
-        "shm_size": "32g"
+        "num_gpus": 1,
+        "memory_limit": "24g",
+        "shm_size": "8g"
     },
-
     "basilica": {
         "image": "ghcr.io/one-covenant/templar-eval:latest",
         "ttl_seconds": 7200,
-        "gpu_count": 2,
-        "gpu_models": ["A100"],
-        "min_gpu_memory_gb": 80,
-        "interconnect": "SXM",
-        "cpu": "8",
-        "memory": "160Gi"
+        "gpu_count": 1,
+        "gpu_models": [
+            "N300s"
+        ],
+        "min_gpu_memory_gb": 24,
+        "interconnect": "PCIe",
+        "cpu": "4",
+        "memory": "32Gi"
     },
-
     "verification": {
         "max_loss_difference": 0.3,
         "min_params_changed_ratio": 0.75,
@@ -45,22 +41,18 @@
         "weight_relative_error_max": 0.008,
         "timer_divergence_threshold": 0.005
     },
-
     "mfu": {
         "gpu_peak_tflops": 312.0,
         "max_plausible_mfu": 75.0,
         "min_mfu": 45.0
     },
-
     "adaptive_threshold": {
         "base_threshold": 0.002,
         "decay_percent": 0.05,
         "decay_interval_blocks": 100
     },
-
     "code_fetch_timeout": 30,
     "max_evaluated_urls": 10000,
-
     "payment": {
         "enabled": true,
         "fee_rao": 50000000,
