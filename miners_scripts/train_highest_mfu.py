@@ -70,9 +70,12 @@ def _prepare_model(model):
             pass
 
         # 3. Disable all dropout computationally during forward passes
-        for dropout_attr in ["attention_dropout", "hidden_dropout_prob", "activation_dropout"]:
-            if hasattr(model.config, dropout_attr):
-                setattr(model.config, dropout_attr, 0.0)
+        try:
+            model.config.attention_dropout = 0.0
+            model.config.hidden_dropout_prob = 0.0
+            model.config.activation_dropout = 0.0
+        except Exception:
+            pass
 
         # 4. Aggressive Sliding Window Attention trick
         # Reduced window (256 instead of 512 like the second place miner) translates to lower true FLOPs 

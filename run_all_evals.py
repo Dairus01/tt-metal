@@ -50,6 +50,15 @@ if __name__ == "__main__":
     print("🏆 STARTING THE CRUSADES Relative Benchmark 🏆")
     print("Testing all 8 ranke miners against the optimized version.\n")
     
+    print("=" * 60)
+    print("HARDWARE DIAGNOSTICS")
+    print("=" * 60)
+    print("Running nvidia-smi:")
+    os.system("nvidia-smi")
+    print("\nPyTorch CUDA Status:")
+    os.system("python3 -c \"import torch; print('CUDA IS AVAILABLE:', torch.cuda.is_available()); print('VERSION:', torch.version.cuda); print('DEVICES:', torch.cuda.device_count() if torch.cuda.is_available() else 0)\"")
+    print("=" * 60 + "\n")
+    
     for miner in MINERS:
         run_simulation(miner)
         
