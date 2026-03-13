@@ -53,7 +53,7 @@ COPY --chown=appuser:appuser src/crusades/core/security_defs.py /app/crusades/co
 # --- COMPREHENSIVE TESTING SETUP ---
 
 # Copy ALL the miner codes
-COPY --chown=appuser:appuser "miners_score_and their code/" "/app/miners_score_and their code/"
+COPY --chown=appuser:appuser "miners_scripts/" "/app/miners_scripts/"
 
 # Copy the wrapper script and simulation
 COPY --chown=appuser:appuser run_all_evals.py /app/run_all_evals.py

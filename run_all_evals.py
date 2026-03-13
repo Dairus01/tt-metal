@@ -21,7 +21,7 @@ def run_simulation(miner_file):
     
     # Copy the specific miner to the expected location for the docker image
     # Assuming the Dockerfile relies on /test/train.py
-    os.system(f"cp 'miners_score_and their code/{miner_file}' /test/train.py")
+    os.system(f"cp 'miners_scripts/{miner_file}' /test/train.py")
     
     start_time = time.time()
     
