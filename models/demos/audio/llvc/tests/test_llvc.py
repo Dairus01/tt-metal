@@ -13,8 +13,6 @@ Includes:
 """
 from __future__ import annotations
 
-import math
-
 import pytest
 import torch
 
@@ -170,7 +168,7 @@ def test_ttnn_no_silent_cpu_fallback_when_ttnn_missing(monkeypatch):
     from models.demos.audio.llvc.tt import ttnn_functional_llvc as mod
 
     monkeypatch.setattr(mod, "ttnn", None, raising=False)
-    cfg = mod.LLVCTTNNConfig(enc_dim=8, n_layers=1, allow_documented_cpu_ops=False)
+    cfg = mod.LLVCTTNNConfig(enc_dim=8, n_layers=1)
     model = mod.TTNNLLvc.__new__(mod.TTNNLLvc)  # bypass __init__ (which uses ttnn)
     model.cfg = cfg
     with pytest.raises(mod.LLVCDeviceUnsupported):

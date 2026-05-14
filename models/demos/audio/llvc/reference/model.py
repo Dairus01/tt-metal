@@ -24,7 +24,7 @@ the TTNN parity tests.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 import torch

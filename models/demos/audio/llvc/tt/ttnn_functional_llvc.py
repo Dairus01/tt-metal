@@ -10,11 +10,9 @@ Design choices (these address reviewer feedback on PR #38831):
   time via :func:`preprocess_model_parameters`. There is no runtime
   fallback from BLOCK_SHARDED to HEIGHT_SHARDED (or any other layout)
   hidden inside the forward pass.
-* **No silent CPU fallbacks.** Any op we cannot run on device raises a
-  ``LLVCDeviceUnsupported`` exception. The caller can opt into the
-  documented CPU shim by constructing the model with
-  ``allow_documented_cpu_ops=True``; in that case the path is logged and
-  callable from tests, but never silent.
+* **No silent CPU fallbacks.** Any op we cannot run on device raises
+  ``LLVCDeviceUnsupported``. There is no opt-in CPU shim; if you want a
+  host run, use the reference model in ``models/demos/audio/llvc/reference``.
 * **Im2Col + matmul convolution.** LLVC's convolutions are tiny (channels
   in the tens, kernel sizes 3-7). We implement them as an explicit
   unfold-then-matmul. This gives us a single deterministic device path
@@ -39,8 +37,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
-from loguru import logger
-
 import torch
 
 try:
@@ -57,9 +53,9 @@ except Exception:  # pragma: no cover - device libs are optional in CI
 class LLVCDeviceUnsupported(RuntimeError):
     """Raised when a code path cannot run on device.
 
-    The forward pass never silently falls back to host PyTorch. Callers
-    that want a CPU shim must opt in via
-    ``LLVCTTNNConfig.allow_documented_cpu_ops``.
+    The forward pass never silently falls back to host PyTorch. If you
+    need a host run, use the reference model in
+    ``models/demos/audio/llvc/reference`` directly.
     """
 
 
@@ -75,13 +71,6 @@ class LLVCTTNNConfig:
         When True, activations are kept in L1 interleaved memory between
         ops where possible. Default is False (DRAM interleaved) for
         determinism on small chunks.
-    math_fidelity:
-        ``ttnn.MathFidelity`` compatible enum value or ``None``. ``None``
-        keeps device defaults.
-    allow_documented_cpu_ops:
-        If True, a small set of explicitly-documented operations may run
-        on host PyTorch. The default is False so reviewers can be sure no
-        path leaks to CPU.
     """
 
     in_channels: int = 1
@@ -91,8 +80,6 @@ class LLVCTTNNConfig:
     dilation_base: int = 2
     use_f0: bool = False
     activations_in_l1: bool = False
-    math_fidelity: Optional[object] = None
-    allow_documented_cpu_ops: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -190,22 +177,23 @@ def preprocess_model_parameters(
 
 
 def _unfold_torch(x: torch.Tensor, kernel: int, dilation: int, state: Optional[torch.Tensor]) -> torch.Tensor:
-    """CPU-side im2col used both for shape derivation and CPU shim.
+    """Im2Col for a causal dilated 1-D conv. Returns ``(B, T, in_ch * kernel)``.
 
-    Returns shape ``(B, T, in_ch * kernel)``.
+    For each output time step ``t`` we gather kernel taps at positions
+    ``t, t+d, t+2d, ..., t+(k-1)d`` from the left-padded (or state-prefixed)
+    input. The slicing form below is equivalent to ``x.unfold`` + dilated
+    indexing but avoids the intermediate window tensor.
     """
     pad = (kernel - 1) * dilation
     if state is None:
         x_full = torch.nn.functional.pad(x, (pad, 0))
     else:
         x_full = torch.cat([state, x], dim=-1)
-    # unfold along time
-    x_unf = x_full.unfold(-1, 1 + (kernel - 1) * dilation, 1)
-    # take dilated taps
-    idx = torch.arange(kernel) * dilation
-    x_taps = x_unf[..., idx]  # (B, C, T, k)
-    B, C, T, K = x_taps.shape
-    return x_taps.permute(0, 2, 1, 3).reshape(B, T, C * K)
+    T = x.shape[-1]
+    # Stack kernel slices, each (B, C, T), then move to (B, T, C, k) -> (B, T, C*k).
+    taps = torch.stack([x_full[..., i * dilation : i * dilation + T] for i in range(kernel)], dim=-1)
+    B, C, _, K = taps.shape
+    return taps.permute(0, 2, 1, 3).reshape(B, T, C * K)
 
 
 # ---------------------------------------------------------------------------

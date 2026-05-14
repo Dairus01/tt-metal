@@ -23,7 +23,6 @@ present.
 from __future__ import annotations
 
 import csv
-import os
 import time
 
 import pytest
@@ -83,7 +82,7 @@ def test_llvc_performance_cpu(chunk_size):
         _ = model(x)
         second_run = time.perf_counter() - t0
 
-    rtf_stream, chunk_lat, _ = _measure_streaming_rtf(model, x, chunk_size, sample_rate)
+    rtf_stream, chunk_lat, total_stream = _measure_streaming_rtf(model, x, chunk_size, sample_rate)
 
     comments = "cpu_reference"
     prep_perf_report(
@@ -108,7 +107,7 @@ def test_llvc_performance_cpu(chunk_size):
             "streaming_rtf": f"{rtf_stream:.4f}",
             "streaming_meets_stage1": str(rtf_stream < STAGE1_RTF_THRESHOLD).lower(),
             "streaming_meets_stage3": str(rtf_stream < STAGE3_RTF_THRESHOLD).lower(),
-            "decoder_tokens_per_sec": f"{x.shape[-1] / max(1e-9, _measure_streaming_rtf(model, x, chunk_size, sample_rate)[2]):.2f}",
+            "decoder_tokens_per_sec": f"{x.shape[-1] / max(1e-9, total_stream):.2f}",
         },
     )
     logger.info(f"Wrote streaming perf sidecar: {sidecar}; RTF={rtf_stream:.3f}")

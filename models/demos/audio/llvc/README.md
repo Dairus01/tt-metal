@@ -68,7 +68,7 @@ Each item below is implemented in this submission:
 | Hardcoded `_from_device(..., batch_size=1)` | The TTNN code derives shape from the input tensor; nothing is hardcoded. |
 | F0-conditioned path | Implemented in both reference and TTNN, gated by `use_f0`. |
 | Prenet matching reference | 7-tap causal Conv1d, matches LLVC's input projection. Any deviation is documented inline. |
-| Silent CPU fallbacks | None. The TTNN model raises `LLVCDeviceUnsupported` if invoked without `ttnn`. There is **no** opt-in CPU shim that runs silently. |
+| Silent CPU fallbacks | None. The TTNN model raises `LLVCDeviceUnsupported` if invoked without `ttnn`. There is no opt-in CPU shim. For a host run, call the reference model directly. |
 
 ## Stage status — *actually* measured
 
