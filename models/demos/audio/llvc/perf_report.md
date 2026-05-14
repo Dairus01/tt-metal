@@ -28,11 +28,11 @@ sidecar that the test produces.
 
 | Metric | Measured | Bounty target | Status |
 | --- | --- | --- | --- |
-| Non-streaming inference (4 s audio) | 5.29 s | n/a (CPU baseline) | — |
-| Streaming RTF | **2.96** | < 0.3 (Stage 1), < 0.1 (Stage 3) | ❌ NOT MET |
-| Streaming chunk latency | 94.6 ms | < 100 ms (Stage 1), < 50 ms (Stage 3) | ⚠️ within Stage 1 on chunk latency, fails on RTF |
-| Decoder throughput (audio samples/s) | 5547.7 | ≥ 50 tokens/s | ✅ |
-| First-run latency | 4.03 s | n/a | — |
+| Non-streaming inference (4 s audio) | 1.94 s | n/a (CPU baseline) | — |
+| Streaming RTF | **2.8226** | < 0.3 (Stage 1), < 0.1 (Stage 3) | ❌ NOT MET |
+| Streaming chunk latency | 90.3 ms | < 100 ms (Stage 1), < 50 ms (Stage 3) | ⚠️ within Stage 1 on chunk latency, fails on RTF |
+| Decoder throughput (audio samples/s) | 5668.5 | ≥ 50 tokens/s | ✅ |
+| First-run latency | 3.05 s | n/a | — |
 
 > The CPU host in this sandbox has no AVX/Neon-tuned PyTorch and runs
 > without thread parallelism, which is why the streaming RTF is well
