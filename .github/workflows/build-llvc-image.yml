@@ -35,6 +35,6 @@ jobs:
           context: .
           file: models/demos/audio/llvc/Dockerfile
           push: true
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          tags: ${{ env.REGISTRY }}/dairus01/tt-metal-llvc:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
