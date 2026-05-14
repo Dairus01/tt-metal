@@ -1,0 +1,11 @@
+# Ignore everything by default
+*
+
+# Only keep LLVC code and minimal pytest support files
+!models/demos/audio/llvc/
+!conftest.py
+!pyproject.toml
+!setup.cfg
+!setup.py
+!pytest.ini
+!tox.ini
