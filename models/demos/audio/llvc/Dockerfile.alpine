@@ -1,0 +1,7 @@
+# Ultra-minimal test image to check if Koyeb can start ANY container on N300s
+FROM python:3.11-alpine
+RUN pip install --no-cache-dir flask
+WORKDIR /app
+COPY models/demos/audio/llvc/koyeb_server.py /app/server.py
+EXPOSE 8080
+CMD ["python", "/app/server.py"]
