@@ -1,0 +1,7 @@
+# Minimal test image to verify Koyeb N300s can start ANY container
+FROM alpine:latest
+RUN apk add --no-cache python3 py3-flask
+WORKDIR /app
+COPY models/demos/audio/llvc/koyeb_server.py /app/server.py
+EXPOSE 8080
+CMD ["python3", "/app/server.py"]
