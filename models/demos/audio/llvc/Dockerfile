@@ -7,10 +7,8 @@ WORKDIR /app
 # Install Python deps for testing and the tiny HTTP server
 RUN pip install --no-cache-dir flask pytest gitpython loguru
 
-# Only copy LLVC code + any repo-level pytest config (.dockerignore hides everything else)
+# Only copy LLVC code (.dockerignore hides everything else)
 COPY models/demos/audio/llvc /app/tt-metal/models/demos/audio/llvc
-COPY conftest.py /app/tt-metal/conftest.py 2>/dev/null || true
-COPY pyproject.toml /app/tt-metal/pyproject.toml 2>/dev/null || true
 
 WORKDIR /app/tt-metal
 ENV PYTHONPATH=/app/tt-metal
