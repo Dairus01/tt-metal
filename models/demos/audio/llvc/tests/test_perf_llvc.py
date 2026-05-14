@@ -37,11 +37,22 @@ STAGE1_RTF_THRESHOLD = 0.3
 STAGE3_RTF_THRESHOLD = 0.1
 
 
-def _measure_streaming_rtf(model, x: torch.Tensor, chunk: int, sample_rate: int):
-    """Run streaming inference and return (rtf, chunk_latency_s, total_s)."""
-    state = model.init_streaming_state(batch=x.shape[0])
-    chunk_times = []
+def _measure_streaming_rtf(model, x: torch.Tensor, chunk: int, sample_rate: int, warmup_passes: int = 2):
+    """Run streaming inference and return (rtf, chunk_latency_s, total_s).
+
+    A streaming RTF measurement that doesn't warm up first is dominated by
+    one-time costs (PyTorch caches, MKL plan selection) on the first chunk,
+    which is not representative of any real deployment. We run a small
+    number of warmup passes (still through the exact same code path) before
+    timing.
+    """
     with torch.no_grad():
+        for _ in range(warmup_passes):
+            state = model.init_streaming_state(batch=x.shape[0])
+            for i in range(0, x.shape[-1], chunk):
+                _, state = model.forward_streaming(x[..., i : i + chunk], state)
+        state = model.init_streaming_state(batch=x.shape[0])
+        chunk_times = []
         t0 = time.perf_counter()
         for i in range(0, x.shape[-1], chunk):
             cs = time.perf_counter()
@@ -65,7 +76,15 @@ def _write_streaming_sidecar(comments: str, row: dict) -> str:
 
 @pytest.mark.parametrize("chunk_size", [512])
 def test_llvc_performance_cpu(chunk_size):
-    """CPU baseline + streaming RTF reported via prep_perf_report + sidecar."""
+    """CPU baseline + streaming RTF reported via prep_perf_report + sidecar.
+
+    The CPU streaming baseline is pinned to a single thread. For the small
+    matmuls used in LLVC, intra-op parallelism costs more in synchronisation
+    than it saves, and the goal of this test is a deterministic, comparable
+    CPU number -- not a tuned production CPU benchmark.
+    """
+    prev_threads = torch.get_num_threads()
+    torch.set_num_threads(1)
     torch.manual_seed(0)
     cfg = LLVCConfig(enc_dim=64, n_layers=6, chunk_size=chunk_size)
     model = LLVCRef(cfg).eval()
@@ -111,6 +130,7 @@ def test_llvc_performance_cpu(chunk_size):
         },
     )
     logger.info(f"Wrote streaming perf sidecar: {sidecar}; RTF={rtf_stream:.3f}")
+    torch.set_num_threads(prev_threads)
 
     # We do *not* assert on RTF here: CPU performance is not the bounty's
     # target. The CSV faithfully reports the number so reviewers can see
