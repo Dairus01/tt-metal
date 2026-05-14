@@ -33,7 +33,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: models/demos/audio/llvc/Dockerfile
+          file: Dockerfile.llvc
           push: true
           tags: ${{ env.REGISTRY }}/dairus01/tt-metal-llvc:latest
           cache-from: type=gha

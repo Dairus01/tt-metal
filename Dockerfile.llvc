@@ -1,0 +1,294 @@
+# Dockerfile for LLVC model bring-up on Koyeb TT-N300S
+# Builds tt-metal from source (proven working pattern)
+ARG UBUNTU_VERSION=22.04
+ARG PYTHON_VERSION=3.10
+
+FROM ghcr.io/astral-sh/uv@sha256:9a23023be68b2ed09750ae636228e903a54a05ea56ed03a934d00fe9fbeded4b AS uv-layer
+FROM mirror.gcr.io/ubuntu:${UBUNTU_VERSION}
+
+ARG PYTHON_VERSION
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TT_METAL_HOME=/tt-metal
+ENV PYTHONPATH=/tt-metal
+ENV ARCH_NAME=wormhole_b0
+ENV PATH="/usr/local/bin:$PATH"
+
+COPY --from=uv-layer /uv /uvx /usr/local/bin/
+
+# Install Python
+ENV UV_PYTHON_INSTALL_DIR="/usr/local/share/uv"
+RUN umask 000 && uv python install "$PYTHON_VERSION"
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git wget curl build-essential cmake ninja-build \
+    software-properties-common ca-certificates \
+    libhwloc-dev libboost-all-dev libyaml-cpp-dev \
+    pciutils kmod jq \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /tt-metal
+
+# Copy full repo source (needed to build tt-metal from source)
+COPY . /tt-metal/
+
+# Install runtime deps
+RUN /bin/bash /tt-metal/install_dependencies.sh --docker || true
+
+# Set up venv
+ENV PYTHON_ENV_DIR=/opt/venv
+RUN umask 000 && uv venv --python "$PYTHON_VERSION" --link-mode copy --managed-python --relocatable "$PYTHON_ENV_DIR"
+ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
+ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
+
+# Install Python packages
+RUN umask 000 && \
+    uv pip install --no-cache --index-url https://download.pytorch.org/whl/cpu torch torchvision && \
+    uv pip install --no-cache pytest loguru numpy pyyaml networkx graphviz \
+    multiprocess psutil scipy pandas seaborn click \
+    Pillow typing_extensions && \
+    uv pip install --no-cache -e .
+
+# Build tt-metal
+RUN /bin/bash -c "./build_metal.sh"
+
+# Flask for health server
+RUN uv pip install --no-cache flask
+
+# Entrypoint: detect TT device, configure hugepages, start server
+COPY <<'ENTRYPOINT_EOF' /tt-metal/entrypoint.sh
+#!/bin/bash
+set -e
+
+echo "=== TT-Metal LLVC Container Starting ==="
+echo "ARCH_NAME=$ARCH_NAME"
+echo "TT_METAL_HOME=$TT_METAL_HOME"
+echo "KOYEB_INSTANCE_TYPE=${KOYEB_INSTANCE_TYPE:-not set}"
+echo "KOYEB_PRIVILEGED=${KOYEB_PRIVILEGED:-not set}"
+
+# Create device nodes if missing
+if [ -d "/dev/tenstorrent" ] || [ -c "/dev/tenstorrent/0" ]; then
+    echo "TT device found at /dev/tenstorrent"
+    ls -la /dev/tenstorrent/ 2>/dev/null || true
+else
+    echo "WARNING: /dev/tenstorrent not found — attempting manual creation..."
+    TT_PCI=$(lspci -nn 2>/dev/null | grep -i "1e52" || true)
+    TT_MOD=$(lsmod 2>/dev/null | grep -i tenstorrent || true)
+    if [ -n "$TT_PCI" ] && [ -n "$TT_MOD" ]; then
+        echo "PCI device found: $TT_PCI"
+        echo "Kernel module loaded: $TT_MOD"
+        TT_MAJOR=$(grep tenstorrent /proc/devices 2>/dev/null | awk '{print $1}')
+        if [ -n "$TT_MAJOR" ]; then
+            echo "Found tenstorrent major number: $TT_MAJOR"
+            mkdir -p /dev/tenstorrent
+            mknod /dev/tenstorrent/0 c "$TT_MAJOR" 0 2>/dev/null || true
+            chmod 666 /dev/tenstorrent/0 2>/dev/null || true
+            if [ -e "/sys/class/tenstorrent" ]; then
+                for dev in /sys/class/tenstorrent/tenstorrent*; do
+                    MINOR=$(cat "$dev/dev" 2>/dev/null | cut -d: -f2)
+                    if [ -n "$MINOR" ] && [ "$MINOR" != "0" ]; then
+                        mknod "/dev/tenstorrent/$MINOR" c "$TT_MAJOR" "$MINOR" 2>/dev/null || true
+                        chmod 666 "/dev/tenstorrent/$MINOR" 2>/dev/null || true
+                    fi
+                done
+            fi
+            echo "Device node(s) created:"
+            ls -la /dev/tenstorrent/ 2>/dev/null || true
+        fi
+    fi
+fi
+
+# Configure hugepages
+if [ -w /proc/sys/vm/nr_hugepages ]; then
+    echo "Configuring hugepages..."
+    echo 1024 > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages 2>/dev/null || true
+    ACTUAL_2M=$(cat /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages 2>/dev/null || echo 'unknown')
+    echo "2MB hugepages: ${ACTUAL_2M} allocated"
+
+    HP_1G_DIR="/sys/kernel/mm/hugepages/hugepages-1048576kB"
+    mkdir -p /dev/hugepages-1G
+    HUGEPAGE_1G_MOUNTED=false
+    if [ -d "$HP_1G_DIR" ]; then
+        echo "1GB hugepage support detected"
+        CURRENT_1G=$(cat "$HP_1G_DIR/nr_hugepages" 2>/dev/null || echo "0")
+        [ "$CURRENT_1G" -lt 1 ] && echo 1 > "$HP_1G_DIR/nr_hugepages" 2>/dev/null || true
+        ACTUAL_1G=$(cat "$HP_1G_DIR/nr_hugepages" 2>/dev/null || echo "0")
+        echo "1GB hugepages: ${ACTUAL_1G} allocated"
+        if ! mountpoint -q /dev/hugepages-1G 2>/dev/null; then
+            mount -t hugetlbfs -o pagesize=1G,mode=777 hugetlbfs /dev/hugepages-1G 2>/dev/null && HUGEPAGE_1G_MOUNTED=true || true
+        else
+            HUGEPAGE_1G_MOUNTED=true
+        fi
+    fi
+    if [ "$HUGEPAGE_1G_MOUNTED" = false ]; then
+        if ! mountpoint -q /dev/hugepages-1G 2>/dev/null; then
+            mount -t hugetlbfs -o pagesize=2M,mode=777 hugetlbfs /dev/hugepages-1G 2>/dev/null || \
+            mount -t hugetlbfs -o mode=777 hugetlbfs /dev/hugepages-1G 2>/dev/null || true
+        fi
+    fi
+    mountpoint -q /dev/hugepages-1G 2>/dev/null && echo "hugetlbfs mounted at /dev/hugepages-1G" || echo "WARNING: hugetlbfs mount failed"
+fi
+
+echo "=== Starting Flask server on port 8000 ==="
+exec python -m flask --app health_server run --host 0.0.0.0 --port 8000
+ENTRYPOINT_EOF
+RUN chmod +x /tt-metal/entrypoint.sh
+
+# Health server adapted for LLVC tests
+COPY <<'EOF' /tt-metal/health_server.py
+from flask import Flask
+import subprocess, threading, sys, os, time, json, signal
+
+app = Flask(__name__)
+test_output = {"status": "pending", "log": "", "started_at": None, "finished_at": None}
+TEST_TIMEOUT = 600
+
+def _get_mem_info():
+    try:
+        r = subprocess.run(["free", "-h"], capture_output=True, text=True, timeout=5)
+        return r.stdout.strip()
+    except Exception:
+        return "(unavailable)"
+
+def _run_pytest(args, env, label):
+    log = f"\n{'='*50}\n{label}\n{'='*50}\n"
+    log += f"Memory before:\n{_get_mem_info()}\n\n"
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "pytest"] + args,
+            capture_output=True, text=True, cwd="/tt-metal", env=env,
+            timeout=TEST_TIMEOUT,
+        )
+        log += result.stdout + result.stderr
+        passed = result.returncode == 0
+    except subprocess.TimeoutExpired:
+        log += f"\n[TIMEOUT] Exceeded {TEST_TIMEOUT}s\n"
+        passed = False
+    except Exception as e:
+        log += f"\n[ERROR] {e}\n"
+        passed = False
+    return log, passed
+
+def run_tests():
+    test_output["status"] = "running"
+    test_output["started_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    test_output["finished_at"] = None
+    test_output["log"] = "Tests starting...\n"
+    env = os.environ.copy()
+    env["ARCH_NAME"] = "wormhole_b0"
+
+    has_device = os.path.exists("/dev/tenstorrent")
+    log_parts = [f"System memory:\n{_get_mem_info()}\n"]
+    overall_pass = True
+
+    # CPU correctness
+    log, passed = _run_pytest(
+        ["models/demos/audio/llvc/tests/test_llvc.py", "-v", "-s", "-k", "cpu", "--no-header", "-rN"],
+        env, "CPU TESTS"
+    )
+    log_parts.append(log)
+    if not passed: overall_pass = False
+
+    # Device tests (if hardware present)
+    if has_device:
+        log, passed = _run_pytest(
+            ["models/demos/audio/llvc/tests/test_llvc.py", "-v", "-s", "-k", "ttnn",
+             "--no-header", "-rN"],
+            env, "DEVICE TESTS"
+        )
+        log_parts.append(log)
+        if not passed: overall_pass = False
+
+        # Perf tests
+        log, passed = _run_pytest(
+            ["models/demos/audio/llvc/tests/test_perf_llvc.py::test_llvc_performance_device",
+             "-v", "-s", "--no-header", "-rN"],
+            env, "PERF TESTS"
+        )
+        log_parts.append(log)
+        if not passed: overall_pass = False
+    else:
+        log_parts.append("\n=== DEVICE TESTS SKIPPED (no /dev/tenstorrent) ===\n")
+
+    # Collect CSV results
+    import glob
+    csv_files = glob.glob("/tt-metal/**/perf_llvc_*.csv", recursive=True)
+    if csv_files:
+        log_parts.append(f"\n=== CSV FILES ({len(csv_files)}) ===\n")
+        for f in sorted(csv_files):
+            log_parts.append(f"\n--- {f} ---\n")
+            try:
+                with open(f) as fh:
+                    log_parts.append(fh.read())
+            except Exception as e:
+                log_parts.append(f"Error reading {f}: {e}\n")
+
+    test_output["log"] = "".join(log_parts)
+    test_output["status"] = "passed" if overall_pass else "failed"
+    test_output["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+
+@app.route("/")
+def index():
+    has_device = os.path.exists("/dev/tenstorrent")
+    return f"""<pre>
+LLVC TTNN Test Runner
+=====================
+Test Status: {test_output['status']}
+TT Device:   {'DETECTED' if has_device else 'NOT FOUND'}
+Started:     {test_output['started_at'] or 'N/A'}
+Finished:    {test_output['finished_at'] or 'N/A'}
+Instance:    {os.environ.get('KOYEB_INSTANCE_TYPE', 'unknown')}
+
+Memory:
+{_get_mem_info()}
+
+Endpoints:
+  /run    - Start test suite
+  /check  - Full environment diagnostics
+  /health - Health check (returns 'ok')
+
+{test_output['log']}
+</pre>"""
+
+@app.route("/run")
+def run():
+    if test_output["status"] == "running":
+        return "<pre>Tests already running. Visit / to see progress.</pre>"
+    threading.Thread(target=run_tests, daemon=True).start()
+    return "<pre>Tests started. Visit / to see results (refresh after ~60s).</pre>"
+
+@app.route("/health")
+def health():
+    return "ok"
+
+@app.route("/check")
+def check():
+    lines = ["=" * 60, "LLVC TTNN Diagnostics", "=" * 60]
+    lines.append(f"\n--- Memory ---\n{_get_mem_info()}")
+    lines.append("\n--- Koyeb Env ---")
+    for v in ["KOYEB_INSTANCE_TYPE", "KOYEB_PRIVILEGED", "KOYEB_REGION", "KOYEB_INSTANCE_ID"]:
+        lines.append(f"  {v}={os.environ.get(v, 'NOT SET')}")
+    lines.append("\n--- TT Env ---")
+    for v in ["ARCH_NAME", "TT_METAL_HOME", "PYTHONPATH"]:
+        lines.append(f"  {v}={os.environ.get(v, 'NOT SET')}")
+    lines.append("\n--- /dev/tenstorrent ---")
+    if os.path.exists("/dev/tenstorrent"):
+        r = subprocess.run(["ls", "-la", "/dev/tenstorrent/"], capture_output=True, text=True)
+        lines.append(r.stdout.strip())
+    else:
+        lines.append("NOT FOUND")
+    lines.append("\n--- Hugepages ---")
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if "huge" in line.lower():
+                    lines.append(f"  {line.strip()}")
+    except Exception as e:
+        lines.append(f"Error: {e}")
+    lines.append("\n" + "=" * 60)
+    return "<pre>" + "\n".join(lines) + "</pre>"
+EOF
+
+EXPOSE 8000
+CMD ["/tt-metal/entrypoint.sh"]
