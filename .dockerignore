@@ -15,6 +15,8 @@
 !create_venv.sh
 !conftest.py
 !pytest.ini
+!README.md
+!LICENSE
 
 # Directories needed for build
 !cmake/
