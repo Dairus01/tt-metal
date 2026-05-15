@@ -1,5 +1,23 @@
 # Ignore everything by default
 *
 
-# Only keep LLVC code
+# LLVC code
 !models/demos/audio/llvc/
+
+# Files needed for tt-metal build from source
+!setup.py
+!pyproject.toml
+!MANIFEST.in
+!CMakeLists.txt
+!CMakePresets.json
+!build_metal.sh
+!install_dependencies.sh
+!create_venv.sh
+!conftest.py
+!pytest.ini
+
+# Directories needed for build
+!cmake/
+!tt_metal/
+!build/
+!generated/
